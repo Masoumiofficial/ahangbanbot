@@ -1,0 +1,24 @@
+# Secrets
+.env
+*.env
+bot/ahangban.db
+*.db
+*.sqlite
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.envrc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Plugin build
+wp-plugin/*.zip
