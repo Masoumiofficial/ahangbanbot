@@ -1,29 +1,35 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 # ---------- Main menu (ReplyKeyboard for easy access) ----------
-def main_reply_keyboard() -> ReplyKeyboardMarkup:
+def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [
+        ["🔍 جست‌وجوی آهنگ", "👤 جست‌وجوی خواننده"],
+        ["🆕 جدیدترین‌ها", "🔥 محبوب‌ترین‌ها"],
+        ["🎤 فهرست خوانندگان", "ℹ️ راهنما"],
+    ]
+    if is_admin:
+        keyboard.append(["🛠 مدیریت"])
     return ReplyKeyboardMarkup(
-        [
-            ["🔍 جست‌وجوی آهنگ", "👤 جست‌وجوی خواننده"],
-            ["🆕 جدیدترین‌ها", "🔥 محبوب‌ترین‌ها"],
-            ["🎤 فهرست خوانندگان", "ℹ️ راهنما"],
-        ],
+        keyboard,
         resize_keyboard=True,
         one_time_keyboard=False,
         input_field_placeholder="نام آهنگ یا خواننده را بنویسید…",
     )
 
 # ---------- Inline main menu ----------
-def main_inline() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 جست‌وجوی آهنگ", switch_inline_query_current_chat="")],
+def main_inline(is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton("🔍 جست‌وجوی آهنگ", callback_data="prompt:search")],
         [
             InlineKeyboardButton("🆕 جدیدترین‌ها", callback_data="browse:latest:1"),
             InlineKeyboardButton("🔥 محبوب‌ترین‌ها", callback_data="browse:popular:1"),
         ],
         [InlineKeyboardButton("🎤 همهٔ خوانندگان", callback_data="artists:page:1")],
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
-    ])
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton("🛠 مدیریت ربات", callback_data="admin:menu")])
+    return InlineKeyboardMarkup(rows)
 
 def back_to_home() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="home")]])
@@ -80,7 +86,9 @@ def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
     artists = song.get("artists") or []
     if artists:
         for a in artists[:3]:
-            rows.append([InlineKeyboardButton(f"👤 {a['name']}", callback_data=f"artist:{a.get('slug') or a.get('term_id')}")])
+            artist_id = a.get("term_id")
+            if artist_id:
+                rows.append([InlineKeyboardButton(f"👤 {str(a.get('name') or 'هنرمند')[:48]}", callback_data=f"artist:{artist_id}")])
 
     # Lyrics
     if song.get("lyrics"):
@@ -95,13 +103,13 @@ def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton("🔗 صفحه در سایت", url=song["permalink"])])
     # Back to artist or search
     rows.append([
-        InlineKeyboardButton("🔍 جست‌وجوی جدید", switch_inline_query_current_chat=""),
+        InlineKeyboardButton("🔍 جست‌وجوی جدید", callback_data="prompt:search"),
         InlineKeyboardButton("🏠 خانه", callback_data="home"),
     ])
     return InlineKeyboardMarkup(rows)
 
 def artist_card(term: dict, page: int, total_pages: int, sort: str = "new") -> InlineKeyboardMarkup:
-    slug = term.get("slug") or term.get("term_id")
+    slug = term.get("term_id") or term.get("slug")
     rows = []
     # Sort options
     rows.append([

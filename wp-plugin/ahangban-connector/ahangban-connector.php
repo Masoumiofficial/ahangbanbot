@@ -2,8 +2,8 @@
 /**
  * Plugin Name: AhangBan Connector — Telegram Bot API
  * Plugin URI:  https://ahangban.ir/
- * Description: لایهٔ امن اتصال ربات تلگرام به داده‌های واقعی آهنگ‌بان. هیچ تغییری در قالب ایجاد نمی‌کند.
- * Version:     1.1.0
+ * Description: لایهٔ امن اتصال ربات تلگرام به داده‌های واقعی آهنگ‌بان. هیچ تغییری در قالب ایجاد نمی‌کند. از نسخه 1.3.0 ارسال رسانه با بارگذاری امن فایل، پنل مدیریت تلگرام و وب‌هوک سازگار با PHP 7.4 پشتیبانی می‌شود.
+ * Version:     1.3.0
  * Author:      AhangBan — Engineering Team
  * License:     GPL v2 or later
  * Text Domain: ahangban-connector
@@ -15,21 +15,25 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'AHANGBAN_CONNECTOR_VERSION', '1.1.0' );
+define( 'AHANGBAN_CONNECTOR_VERSION', '1.3.0' );
 define( 'AHANGBAN_CONNECTOR_FILE', __FILE__ );
 define( 'AHANGBAN_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AHANGBAN_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 
 require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-auth.php';
+require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-settings.php';
 require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-cache.php';
 require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-search.php';
 require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-api.php';
 require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-admin.php';
+require_once AHANGBAN_CONNECTOR_DIR . 'includes/class-telegram.php';
 
 add_action( 'plugins_loaded', function () {
     AhangBan_Auth::init();
+    AhangBan_Settings::init();
     AhangBan_Cache::init();
     AhangBan_API::init();
+    AhangBan_Telegram::init();
     if ( is_admin() ) {
         AhangBan_Admin::init();
     }

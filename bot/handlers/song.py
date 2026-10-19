@@ -1,6 +1,17 @@
+import asyncio
+import html
+import ipaddress
 import logging
+import os
+import re
+import socket
+import tempfile
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+
 import httpx
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
@@ -8,12 +19,97 @@ from ..api_client import api, APIError
 from ..db import increment_stat, get_file_id, set_file_id
 from ..utils.formatters import song_caption, lyrics_text
 from ..utils.keyboards import song_card
-from ..config import AHANGBAN_API_BASE
 
 log = logging.getLogger("ahangban.song")
 
-# Telegram limit for audio upload is 50MB for bot API (2GB technically but bot must stream)
-MAX_AUDIO_BYTES = 50 * 1024 * 1024
+# Keep below the hosted Bot API upload ceiling to leave room for multipart overhead.
+MAX_AUDIO_BYTES = 49 * 1024 * 1024
+
+
+def _is_public_https_url(url: str) -> bool:
+    """Reject credentials, non-HTTPS URLs, private/reserved IPs and unsafe DNS answers."""
+    try:
+        parsed = urlparse(str(url).strip())
+        if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        if parsed.port not in (None, 443):
+            return False
+        host = parsed.hostname.rstrip(".").lower()
+        if host in {"localhost", "localhost.localdomain"} or host.endswith((".localhost", ".local", ".internal", ".test", ".invalid")):
+            return False
+        try:
+            addresses = {ipaddress.ip_address(host)}
+        except ValueError:
+            addresses = {
+                ipaddress.ip_address(item[4][0].split("%", 1)[0])
+                for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            }
+        return bool(addresses) and all(address.is_global for address in addresses)
+    except (ValueError, OSError, socket.gaierror):
+        return False
+
+
+async def _download_public_media(url: str):
+    """Stream a bounded HTTPS media file to disk; redirects are revalidated at every hop."""
+    current = url
+    timeout = httpx.Timeout(18.0, connect=7.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        for _ in range(4):
+            if not await asyncio.to_thread(_is_public_https_url, current):
+                raise ValueError("Unsafe media URL or redirect")
+            async with client.stream("GET", current) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect without Location")
+                    current = urljoin(current, location)
+                    continue
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                if content_type.startswith("text/") or "json" in content_type or "xml" in content_type:
+                    raise ValueError("Source returned a web page, not media")
+                declared_size = int(response.headers.get("content-length", "0") or 0)
+                if declared_size > MAX_AUDIO_BYTES:
+                    raise ValueError("Media file exceeds upload limit")
+
+                suffix = Path(urlparse(current).path).suffix.lower()
+                if suffix not in {".mp3", ".m4a", ".aac", ".ogg", ".mp4", ".m4v", ".mov", ".webm", ".zip", ".rar", ".7z"}:
+                    suffix = ".bin"
+                fd, temp_path = tempfile.mkstemp(prefix="ahangban-media-", suffix=suffix)
+                size = 0
+                try:
+                    with os.fdopen(fd, "wb") as output:
+                        async for chunk in response.aiter_bytes(64 * 1024):
+                            size += len(chunk)
+                            if size > MAX_AUDIO_BYTES:
+                                raise ValueError("Media file exceeds upload limit")
+                            output.write(chunk)
+                    if size == 0:
+                        raise ValueError("Media file is empty")
+                    raw_name = os.path.basename(urlparse(current).path) or "ahangban-media" + suffix
+                    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_name)[:100] or "ahangban-media" + suffix
+                    return temp_path, content_type, filename
+                except Exception:
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
+                    raise
+    raise ValueError("Too many media redirects")
+
+
+def _media_caption(song: dict, quality: str) -> str:
+    title = song.get("song") or song.get("title") or "آهنگ آهنگ‌بان"
+    artist = song.get("artist") or "آهنگ‌بان"
+    return f"🎵 {title} — {artist}\n💿 کیفیت: {quality}\n🔗 {song.get('permalink') or ''}"[:950]
+
+
+def _file_id_from_message(message):
+    for attr in ("audio", "video", "document"):
+        item = getattr(message, attr, None)
+        if item:
+            return item
+    return None
 
 async def song_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -140,81 +236,103 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"❌ کیفیت {quality} برای این اثر موجود نیست.\nکیفیت‌های موجود: {', '.join(quals.keys()) or '—'}")
         return
 
-    # SSRF allowlist: only ahangban.ir and dl.* domains
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
-    allowed = host.endswith("ahangban.ir") or host.startswith("dl.") or "ahangban" in host
-    # For safety, allow any https URL from DB (admin controls DB) but block private IPs
-    if host in ("127.0.0.1", "localhost", "0.0.0.0") or host.startswith("10.") or host.startswith("192.168."):
-        await query.message.reply_text("⛔ لینک نامعتبر.")
+    url = str(url).strip()
+    if not await asyncio.to_thread(_is_public_https_url, url):
+        keyboard = []
+        permalink = song.get("permalink")
+        if permalink and await asyncio.to_thread(_is_public_https_url, str(permalink)):
+            keyboard.append([InlineKeyboardButton("🔗 صفحهٔ اثر در آهنگ‌بان", url=permalink)])
+        await query.message.reply_text(
+            "⛔ لینک فایل امن یا HTTPS عمومی نیست؛ از صفحهٔ رسمی اثر استفاده کنید.",
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+        )
         return
 
-    # Check cached file_id
-    cached_file_id = await get_file_id(url)
+    parsed = urlparse(url)
+    extension = Path(parsed.path).suffix.lower()
+    is_video = quality in {"480", "720", "1080"} or extension in {".mp4", ".m4v", ".mov", ".webm"}
+    is_archive = extension in {".zip", ".rar", ".7z"}
+    caption = _media_caption(song, quality)
+    timeout_args = {"read_timeout": 25, "write_timeout": 25, "connect_timeout": 8, "pool_timeout": 8}
+
+    # Telegram file_ids are reusable for audio files and avoid repeated file transfers.
+    cached_file_id = await get_file_id(url) if not is_video and not is_archive else None
     if cached_file_id:
         try:
-            await query.message.chat.send_action("upload_voice")
-            await query.message.reply_audio(
-                audio=cached_file_id,
-                caption=f"🎵 {song.get('song') or song.get('title')} — {song.get('artist')}\n🔗 {song.get('permalink')}",
-            )
+            await query.message.chat.send_action("upload_audio")
+            await query.message.reply_audio(audio=cached_file_id, caption=caption, **timeout_args)
             return
-        except Exception as e:
-            log.warning("cached file_id invalid: %s", e)
-            # Fall through to fresh download
+        except Exception as exc:
+            log.info("cached Telegram file_id expired; retrying source: %s", exc)
 
-    # HEAD check size
+    # Fast path: let Telegram fetch the original URL. If it fails, the bounded local-upload path follows.
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            head = await client.head(url)
-            size = int(head.headers.get("content-length") or 0)
-            ctype = head.headers.get("content-type") or ""
-            if size and size > MAX_AUDIO_BYTES:
-                # Too large for direct upload — give link
-                await query.message.reply_text(
-                    f"📦 حجم فایل کیفیت {quality} حدود {size // (1024*1024)}MB است (بیش از ۵۰MB).\n"
-                    f"🔗 لینک مستقیم دانلود:\n{url}\n\n"
-                    f"صفحهٔ اثر: {song.get('permalink')}",
-                    disable_web_page_preview=False,
-                )
-                return
-            # Also check content-type vaguely
-            if head.status_code >= 400:
-                await query.message.reply_text(
-                    f"⚠️ لینک کیفیت {quality} در دسترس نیست (خطای {head.status_code}).\n"
-                    f"صفحهٔ اثر: {song.get('permalink')}"
-                )
-                return
-    except Exception as e:
-        log.warning("HEAD check failed for %s: %s", url, e)
-        # Continue anyway — try to upload
+        await query.message.chat.send_action("upload_video" if is_video else "upload_document" if is_archive else "upload_audio")
+        if is_video:
+            sent = await query.message.reply_video(video=url, caption=caption, supports_streaming=True, **timeout_args)
+        elif is_archive:
+            sent = await query.message.reply_document(document=url, caption=caption, **timeout_args)
+        else:
+            sent = await query.message.reply_audio(
+                audio=url,
+                caption=caption,
+                title=(song.get("song") or song.get("title") or "آهنگ")[:64],
+                performer=(song.get("artist") or "آهنگ‌بان")[:64],
+                **timeout_args,
+            )
+        media = _file_id_from_message(sent)
+        if media and getattr(sent, "audio", None):
+            await set_file_id(url, media.file_id, quality, media.file_unique_id)
+        return
+    except Exception as exc:
+        log.info("Telegram could not fetch media URL; trying bounded server upload: %s", exc)
 
-    # Try to send audio directly via URL (Telegram will fetch)
+    temp_path = None
     try:
-        await query.message.chat.send_action("upload_voice")
-        # Use URL directly — Telegram servers fetch it (no need to download ourselves)
-        # This avoids server bandwidth and respects Telegram 50MB limit server-side
-        sent = await query.message.reply_audio(
-            audio=url,
-            caption=f"🎵 {song.get('song') or song.get('title')} — {song.get('artist')}\n"
-                    f"💿 کیفیت: {quality}\n🔗 {song.get('permalink')}",
-            title=song.get("song") or song.get("title") or "آهنگ",
-            performer=song.get("artist") or "آهنگ‌بان",
-        )
-        # Cache file_id for next time
-        if sent and sent.audio:
-            await set_file_id(url, sent.audio.file_id, quality, sent.audio.file_unique_id)
-            log.info("cached file_id for %s quality %s", url, quality)
-    except Exception as e:
-        log.warning("send_audio via URL failed: %s", e)
-        # Fallback: give link
+        temp_path, content_type, filename = await _download_public_media(url)
+        suffix = Path(filename).suffix.lower()
+        is_video = is_video or content_type.startswith("video/") or suffix in {".mp4", ".m4v", ".mov", ".webm"}
+        is_archive = is_archive or suffix in {".zip", ".rar", ".7z"} or "zip" in content_type or "rar" in content_type
+        with open(temp_path, "rb") as file_handle:
+            upload = InputFile(file_handle, filename=filename, read_file_handle=False)
+            if is_video:
+                sent = await query.message.reply_video(video=upload, caption=caption, supports_streaming=True, **timeout_args)
+            elif is_archive:
+                sent = await query.message.reply_document(document=upload, caption=caption, **timeout_args)
+            else:
+                try:
+                    sent = await query.message.reply_audio(
+                        audio=upload,
+                        caption=caption,
+                        title=(song.get("song") or song.get("title") or "آهنگ")[:64],
+                        performer=(song.get("artist") or "آهنگ‌بان")[:64],
+                        **timeout_args,
+                    )
+                except BadRequest as exc:
+                    log.info("Telegram rejected audio metadata; retrying as a document: %s", exc)
+                    with open(temp_path, "rb") as document_handle:
+                        document = InputFile(document_handle, filename=filename, read_file_handle=False)
+                        sent = await query.message.reply_document(document=document, caption=caption, **timeout_args)
+        media = _file_id_from_message(sent)
+        if media and getattr(sent, "audio", None):
+            await set_file_id(url, media.file_id, quality, media.file_unique_id)
+            log.info("cached Telegram audio file_id for quality %s", quality)
+    except Exception as exc:
+        log.warning("bounded media download/upload failed for song %s: %s", sid, exc)
+        keyboard = [[InlineKeyboardButton("🌐 دریافت فایل از منبع", url=url)]]
+        permalink = song.get("permalink")
+        if permalink and urlparse(permalink).scheme == "https":
+            keyboard.append([InlineKeyboardButton("🔗 صفحهٔ اثر در آهنگ‌بان", url=permalink)])
         await query.message.reply_text(
-            f"⚠️ ارسال مستقیم ممکن نشد (محدودیت تلگرام یا زیرساخت).\n"
-            f"🔗 لینک دانلود کیفیت {quality}:\n{url}\n\n"
-            f"صفحهٔ اثر: {song.get('permalink')}",
-            disable_web_page_preview=False,
+            "⚠️ تلگرام نتوانست فایل را مستقیم ارسال کند و بارگذاری امن از هاست هم ناموفق شد. از یکی از پیوندهای رسمی زیر استفاده کنید.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 async def lyrics_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -274,19 +392,19 @@ async def album_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not tracks:
         await query.message.reply_text("ترکی برای این آلبوم ثبت نشده است.")
         return
-    lines = [f"💿 <b>ترک‌های آلبوم «{song.get('song') or song.get('title')}»</b>\n"]
+    album_title = html.escape(str(song.get("song") or song.get("title") or "آلبوم"))
+    lines = [f"💿 <b>ترک‌های آلبوم «{album_title}»</b>"]
     keyboard = []
-    for i, t in enumerate(tracks, 1):
-        name = t.get("song_names") or f"ترک {i}"
-        keyboard.append([InlineKeyboardButton(f"{i}. {name[:35]}", callback_data=f"noop")])
-        # Add download buttons per track
+    for i, track in enumerate(tracks[:30], 1):
+        name = str(track.get("song_names") or f"ترک {i}")
+        lines.append(f"{i}. {html.escape(name)}")
+        keyboard.append([InlineKeyboardButton(f"{i}. {name[:35]}", callback_data="noop")])
         row = []
-        if t.get("albumlink128"):
-            row.append(InlineKeyboardButton(f"⬇️128 #{i}", url=t["albumlink128"]))
-        if t.get("albumlink320"):
-            row.append(InlineKeyboardButton(f"⬇️320 #{i}", url=t["albumlink320"]))
+        for field, label in (("albumlink128", "⬇️128"), ("albumlink320", "⬇️320")):
+            link = track.get(field)
+            if link and await asyncio.to_thread(_is_public_https_url, str(link)):
+                row.append(InlineKeyboardButton(f"{label} #{i}", url=link))
         if row:
             keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
-    text = "\n".join(lines) + "\n".join([f"{i}. {t.get('song_names') or '—'}" for i, t in enumerate(tracks, 1)])
-    await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))

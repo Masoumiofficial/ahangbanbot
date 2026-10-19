@@ -1,3 +1,4 @@
+import html
 from telegram import Update
 from telegram.ext import ContextTypes
 from ..config import is_admin
@@ -12,24 +13,29 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_blocked(user.id):
         await update.message.reply_text("⛔ شما مسدود شده‌اید. برای پشتیبانی پیام دهید: @ahangban_support")
         return
-    await upsert_user(user.id, user.username or "", user.first_name or "", user.last_name or "", is_admin=is_admin(user.id))
+    if update.effective_chat and update.effective_chat.type == "private":
+        await upsert_user(user.id, user.username or "", user.first_name or "", user.last_name or "", is_admin=is_admin(user.id))
     name = user.first_name or ""
+    admin = is_admin(user.id)
     await update.message.reply_text(
         welcome_text(name),
         parse_mode="HTML",
-        reply_markup=main_reply_keyboard(),
+        reply_markup=main_reply_keyboard(admin),
     )
-    # Also send inline menu
     await update.message.reply_text(
         "⬇️ میانبر سریع:",
-        reply_markup=main_inline(),
+        reply_markup=main_inline(admin),
     )
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user and await is_blocked(user.id):
         return
-    await update.message.reply_text(help_text(), parse_mode="HTML", reply_markup=main_inline())
+    await update.message.reply_text(
+        help_text(),
+        parse_mode="HTML",
+        reply_markup=main_inline(is_admin(user.id) if user else False),
+    )
 
 async def ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from ..api_client import api
@@ -44,22 +50,40 @@ async def ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏰ زمان سرور: {data.get('time')}"
         )
     except Exception as e:
-        await update.message.reply_text(f"❌ خطا در اتصال به سایت:\n<code>{e}</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            f"❌ خطا در اتصال به سایت:\n<code>{html.escape(str(e)[:300])}</code>",
+            parse_mode="HTML",
+        )
 
 async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(help_text(), parse_mode="HTML", reply_markup=main_inline())
+    user = update.effective_user
+    await query.edit_message_text(
+        help_text(),
+        parse_mode="HTML",
+        reply_markup=main_inline(is_admin(user.id) if user else False),
+    )
 
 async def home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    # Show main menu by editing
-    await query.edit_message_text(
-        "🏠 <b>منوی اصلی آهنگ‌بان</b>\n\nنام آهنگ یا خواننده را بنویسید یا یکی از گزینه‌ها را انتخاب کنید.",
-        parse_mode="HTML",
-        reply_markup=main_inline(),
-    )
+    user = update.effective_user
+    text = "🏠 <b>منوی اصلی آهنگ‌بان</b>\n\nنام آهنگ یا خواننده را بنویسید یا یکی از گزینه‌ها را انتخاب کنید."
+    markup = main_inline(is_admin(user.id) if user else False)
+    try:
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    except Exception:
+        # The home button may belong to a photo/video card, which cannot be edited as text.
+        if query.message:
+            await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def search_prompt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.message:
+        await query.message.reply_text("🎵 نام آهنگ یا خواننده را بفرستید؛ مثلاً: محسن یگانه — بی‌تاب")
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("—")
