@@ -1,5 +1,6 @@
 import math
 import logging
+import uuid
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -34,10 +35,14 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     }
     if text in shortcuts:
         action = shortcuts[text]
+        if action != "artist_prompt":
+            context.user_data.pop("search_mode", None)
         if action == "search_prompt":
+            context.user_data.pop("search_mode", None)
             await update.message.reply_text("🎵 نام آهنگ موردنظر را بنویسید (مثلاً: بی‌تاب محسن یگانه):")
             return
         elif action == "artist_prompt":
+            context.user_data["search_mode"] = "artist"
             await update.message.reply_text("🎤 نام خواننده را بنویسید (مثلاً: معین، گوگوش، سیاوش قمیشی):")
             return
         elif action == "latest":
@@ -56,6 +61,11 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             from .start import help_handler
             await help_handler(update, context)
             return
+
+    if context.user_data.pop("search_mode", None) == "artist":
+        from .artist import artist_text_search
+        await artist_text_search(update, context)
+        return
 
     # Commands already handled elsewhere
     if text.startswith("/"):
@@ -93,10 +103,15 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user:
         await log_search(user.id, text, len(results))
         await increment_stat("searches")
-        await upsert_user(user.id, user.username or "", user.first_name or "", user.last_name or "", is_admin=is_admin(user.id))
+        if update.effective_chat and update.effective_chat.type == "private":
+            await upsert_user(user.id, user.username or "", user.first_name or "", user.last_name or "", is_admin=is_admin(user.id))
 
     if not results:
-        await update.message.reply_text(no_results(text), parse_mode=ParseMode.HTML, reply_markup=main_inline())
+        await update.message.reply_text(
+            no_results(text),
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_inline(is_admin(user.id) if user else False),
+        )
         return
 
     await _send_search_page(update, context, text, data, page=1)
@@ -138,20 +153,24 @@ async def _send_search_page(update, context, query: str, data: dict, page: int):
         label = f"{title} — {artist}" if artist else title
         keyboard.append([InlineKeyboardButton(f"🎵 {label}", callback_data=f"song:{sid}")])
 
-    # Pagination
-    extra = f":{query}"
+    # Keep callback_data under Telegram's 64-byte limit; store the full query per user.
+    token = "q" + uuid.uuid4().hex[:8]
+    query_tokens = context.user_data.setdefault("search_query_tokens", {})
+    query_tokens[token] = query
+    while len(query_tokens) > 20:
+        query_tokens.pop(next(iter(query_tokens)))
+
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"search:{page-1}{extra}"))
+        nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"search:{page-1}:{token}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"search:{page+1}{extra}"))
+        nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"search:{page+1}:{token}"))
     keyboard.append(nav)
     keyboard.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
 
     markup = InlineKeyboardMarkup(keyboard)
 
-    # Save context for pagination
     context.user_data["last_query"] = query
     context.user_data["last_search_data"] = data
 
@@ -166,19 +185,24 @@ async def _send_search_page(update, context, query: str, data: dict, page: int):
 async def search_pagination_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data  # search:{page}:{query}
-    # Extract: search:2:query text (query may contain colons)
-    parts = data.split(":", 2)
+    parts = query.data.split(":", 2)
     if len(parts) < 2:
         return
     try:
-        page = int(parts[1])
+        page = max(1, int(parts[1]))
     except ValueError:
         return
-    # Query is after second colon
-    q = parts[2] if len(parts) > 2 else context.user_data.get("last_query", "")
+    token = parts[2] if len(parts) > 2 else ""
+    q = context.user_data.get("search_query_tokens", {}).get(token, "")
+    # Backward compatibility for old raw-query buttons; expired short tokens are not queries.
+    is_generated_token = len(token) == 9 and token.startswith("q") and all(ch in "0123456789abcdef" for ch in token[1:])
+    if not q and token and not is_generated_token and len(token.encode("utf-8")) <= 52:
+        q = token
     if not q:
-        await query.edit_message_text("⛔ عبارت جست‌وجو منقضی شد — دوباره جست‌وجو کنید.", reply_markup=main_inline())
+        await query.edit_message_text(
+            "⛔ عبارت جست‌وجو منقضی شد — دوباره جست‌وجو کنید.",
+            reply_markup=main_inline(update.effective_user and is_admin(update.effective_user.id)),
+        )
         return
     await query.edit_message_text("⏳ در حال بارگذاری…")
     try:

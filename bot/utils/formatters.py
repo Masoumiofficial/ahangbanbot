@@ -100,6 +100,7 @@ def lyrics_text(song: dict) -> str:
     lyrics = re.sub(r"</p>", "\n\n", lyrics, flags=re.I)
     lyrics = re.sub(r"<[^>]+>", "", lyrics)
     lyrics = html.unescape(lyrics).strip()
+    lyrics = html.escape(lyrics)
     lyrics = re.sub(r"\n{3,}", "\n\n", lyrics)
     # Limit for Telegram (4096)
     header = f"📝 متن ترانهٔ «{title}»"

@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import signal
+import time
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -11,16 +12,24 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
+    TypeHandler,
+    ApplicationHandlerStop,
 )
 
-from .config import BOT_TOKEN, LOG_LEVEL, validate, RATE_LIMIT_PER_MINUTE
-from .db import init_db, is_blocked, check_rate_limit
-from .handlers.start import start_handler, help_handler, ping_handler, help_callback, home_callback, noop_callback
+from .config import BOT_TOKEN, LOG_LEVEL, validate, RATE_LIMIT_PER_MINUTE, is_admin
+from .db import init_db, is_blocked, check_rate_limit, upsert_user
+from .handlers.start import start_handler, help_handler, ping_handler, help_callback, home_callback, noop_callback, search_prompt_callback
 from .handlers.search import search_text_handler, search_command, search_pagination_callback
 from .handlers.song import song_callback, download_callback, lyrics_callback, related_callback, album_callback, song_command
 from .handlers.artist import artists_list_handler, artist_callback, artist_command
 from .handlers.browse import latest_handler, popular_handler, browse_callback
-from .handlers.admin import stats_handler, health_handler, cache_clear_handler, block_handler, unblock_handler, broadcast_handler, broadcast_confirm_handler
+from .handlers.admin import (
+    stats_handler, health_handler, cache_clear_handler, block_handler, unblock_handler,
+    broadcast_handler, broadcast_confirm_handler, admin_menu_callback, admin_stats_callback,
+    admin_health_callback, admin_cache_confirm_callback, admin_cache_clear_callback,
+    admin_users_callback, admin_broadcast_help_callback, admin_broadcast_confirm_callback,
+    admin_broadcast_cancel_callback,
+)
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -33,21 +42,38 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # ---- Middleware: rate limit + block check ----
 async def rate_limit_middleware(update: Update, context):
+    """Pre-dispatch guard for every update; stops blocked/flooding users before handlers run."""
     user = update.effective_user
     if not user:
         return
+
     if await is_blocked(user.id):
-        # Silently ignore but answer callback queries
         if update.callback_query:
-            await update.callback_query.answer("⛔ مسدود شده‌اید.")
-        return
+            await update.callback_query.answer("⛔ دسترسی شما محدود شده است.", show_alert=True)
+        elif update.effective_message:
+            last_notice = context.user_data.get("blocked_notice_at", 0)
+            if time.time() - last_notice >= 60:
+                await update.effective_message.reply_text("⛔ دسترسی شما به ربات محدود شده است.")
+                context.user_data["blocked_notice_at"] = time.time()
+        raise ApplicationHandlerStop
+
     allowed = await check_rate_limit(user.id, RATE_LIMIT_PER_MINUTE)
     if not allowed:
         if update.callback_query:
             await update.callback_query.answer("⏳ کمی صبر کنید — درخواست زیاد است.", show_alert=False)
-        elif update.message:
-            await update.message.reply_text("⏳ لطفاً چند ثانیه صبر کنید — درخواست‌های شما بیش از حد است.")
-        return
+        elif update.effective_message:
+            await update.effective_message.reply_text("⏳ لطفاً کمی صبر کنید؛ تعداد درخواست‌ها بیش از حد است.")
+        raise ApplicationHandlerStop
+
+    chat = update.effective_chat
+    if chat and chat.type == "private":
+        await upsert_user(
+            user.id,
+            user.username or "",
+            user.first_name or "",
+            user.last_name or "",
+            is_admin=is_admin(user.id),
+        )
 
 # Global error handler
 async def error_handler(update, context):
@@ -70,13 +96,8 @@ def build_app() -> Application:
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Type handlers for all updates: rate limit via Job? We use a handler for that
-    # We implement rate limit as a pre-check in each text/callback handler wrapper
-    # For global coverage, add a MessageHandler with low priority that does rate check
-    # But simplest: add a handler that runs first and checks
-    # PTB supports `Application.add_handler` order; we insert a handler for all messages that blocks if needed
-    # We'll just add a check inside each handler — plus a generic middleware via `add_handler` with group -1
-    # PTB v21 supports `filters.ALL` — we use it as guard
+    # Global guard runs in an earlier group and stops dispatch for blocked/flooding users.
+    app.add_handler(TypeHandler(Update, rate_limit_middleware), group=-1)
 
     # Commands
     app.add_handler(CommandHandler("start", start_handler))
@@ -100,6 +121,16 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("broadcast_confirm", broadcast_confirm_handler))
 
     # Callback queries — order matters: specific before generic
+    app.add_handler(CallbackQueryHandler(admin_menu_callback, pattern=r"^admin:menu$"))
+    app.add_handler(CallbackQueryHandler(admin_stats_callback, pattern=r"^admin:stats$"))
+    app.add_handler(CallbackQueryHandler(admin_health_callback, pattern=r"^admin:health$"))
+    app.add_handler(CallbackQueryHandler(admin_cache_confirm_callback, pattern=r"^admin:cache_confirm$"))
+    app.add_handler(CallbackQueryHandler(admin_cache_clear_callback, pattern=r"^admin:cache_clear$"))
+    app.add_handler(CallbackQueryHandler(admin_users_callback, pattern=r"^admin:users$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_help_callback, pattern=r"^admin:broadcast_help$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_confirm_callback, pattern=r"^admin:broadcast_confirm$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^admin:broadcast_cancel$"))
+    app.add_handler(CallbackQueryHandler(search_prompt_callback, pattern=r"^prompt:search$"))
     app.add_handler(CallbackQueryHandler(song_callback, pattern=r"^song:\d+$"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern=r"^dl:\d+:.+$"))
     app.add_handler(CallbackQueryHandler(lyrics_callback, pattern=r"^lyrics:\d+$"))

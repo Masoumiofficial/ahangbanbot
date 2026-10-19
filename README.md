@@ -1,13 +1,14 @@
-# 🎶 ربات تلگرام آهنگ‌بان — APEX ULTRA
+# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.3.0
 
 > **برند:** آهنگ‌بان (AhangBan) — https://ahangban.ir  
 > **زبان:** فارسی · **جهت:** RTL · **منبع حقیقت:** دیتابیس وردپرس آهنگ‌بان  
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
-> ### 📥 دانلود مستقیم
-> - **ZIP شاخهٔ فعلی (v1.1.0 — artist):** https://github.com/Masoumiofficial/ahangbanbot/archive/refs/heads/arena/9ae97d8c-ahangbanbot.zip
-> - **ZIP افزونه به‌تنهایی:** پس از دانلود ZIP بالا → پوشه `wp-plugin/ahangban-connector` را از داخل ZIP جدا کنید و به شکل ZIP جدید فشرده کنید (یا از لینک Releases در گیت‌هاب).
-> - بعد از نصب افزونه، راهنمای مرحله‌به‌مرحله پایین را دنبال کنید — در ۵ دقیقه ربات لایو می‌شود.
+> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.3.0
+> - **ZIP شاخهٔ به‌روزشده:** https://github.com/Masoumiofficial/ahangbanbot/archive/refs/heads/arena/24085415-ahangbanbot.zip
+> - برای WordPress، از ZIP شاخه فقط پوشهٔ `wp-plugin/ahangban-connector` را ZIP کنید و از پیشخوان بارگذاری کنید.
+> - **دایرکت‌ادمین/بدون SSH:** توکن را در پیشخوان ذخیره کنید، وب‌هوک را ست کنید؛ فایل‌های صوتی در صورت امکان مستقیم upload می‌شوند و در غیر این صورت پیوند واقعی می‌آید.
+> - جزئیات نصب و پنل ادمین: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md).
 
 ---
 
@@ -43,9 +44,10 @@
 - صفحهٔ خواننده: تصویر، بیوگرافی، شمار آثار به تفکیک نوع، لینک شبکه‌های اجتماعی، آثار صفحه‌بندی‌شده با مرتب‌سازی (جدید/قدیم/الفبایی)
 - فهرست الفبایی همهٔ خوانندگان (مانند `/artists/` در سایت) + فیلتر حرف + جست‌وجوی زنده
 - جدیدترین‌ها و محبوب‌ترین‌های ماه (بر اساس `meta_key=views`)
-- ارسال فایل صوتی در تلگرام تا ۵۰MB (کش `file_id` برای جلوگیری از دانلود تکراری)؛ برای حجم بیشتر لینک دانلود معتبر
-- علاقه‌مندی‌ها (محلی)، تاریخچهٔ جست‌وجو، اشتراک‌گذاری لینک اثر
-- پنل ادمین: `/stats`، `/health`، `/block`، `/broadcast`، پاک‌سازی کش
+- ارسال فایل واقعی در تلگرام: دریافت مستقیم توسط تلگرام، سپس fallback امنِ دانلود/آپلود تا ۴۹ MiB؛ کش `file_id` صوت و پیوند معتبر در صورت شکست
+- پنل ادمین داخل ربات: `/admin` و دکمهٔ مدیریت، آمار، سلامت، پاک‌سازی کش، `/block`, `/unblock` و پیام همگانیِ تأییدشده
+- حالت webhook داخلی PHP برای هاست اشتراکی؛ ربات Python با polling به‌عنوان گزینهٔ VPS/Docker
+- علاقه‌مندی‌ها (در حالت Python)، تاریخچهٔ جست‌وجو، اشتراک‌گذاری لینک اثر
 
 > **اصل طلایی:** اگر فیلدی در دیتابیس نیست، جعل نمی‌شود — حذف یا «ناموجود» نمایش داده می‌شود.
 
@@ -53,17 +55,18 @@
 
 ## معماری
 
-**هیبرید — افزونهٔ امن + سرویس مستقل** (گزینهٔ انتخاب‌شده از `docs/01-ARCHITECTURE.md`)
+**دو حالت اجرا با یک منبع دادهٔ وردپرس:**
 
 ```
-[تلگرام] ⇄ Bot API ⇄ [ربات Python (polling, async)] ⇄ HTTPS + Bearer Token ⇄ [افزونه ahangban-connector روی وردپرس] ⇄ WP DB
-                              ↕
-                        SQLite محلی (کاربران، نرخ، علاقه‌مندی، کش file_id)
+هاست اشتراکی (پیشنهادی)                 VPS/Docker (اختیاری)
+[تلگرام] ⇄ Bot API ⇄ [WP Webhook PHP] ─┐  [تلگرام] ⇄ Bot API ⇄ [Python polling]
+                                       ├⇄ [افزونه ahangban-connector] ⇄ WP DB
+                                       └   (توکن API برای Python)
 ```
 
-**چرا هیبرید؟** هاست فعلی `etehadya` اشتراکی با ionCube است — اجرای دائمی پایتون روی آن ناپایدار است؛ افزونه روی همان هاست می‌ماند و ربات روی VPS/کانتینر خارج از هاست اجرا می‌شود. پولینگ پیش‌فرض است؛ وب‌هوک اختیاری.
+برای دایرکت‌ادمین و بدون SSH، حالت **وب‌هوک PHP** را در پیشخوان فعال کنید؛ سرویس ماندگار یا دیتابیس جدا لازم نیست. حالت Python/polling برای VPS اختیاری است و دادهٔ آهنگ/خواننده همچنان فقط از WordPress خوانده می‌شود.
 
-جزئیات کامل: [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md) · یافته‌های مهندسی معکوس: [`docs/00-REVERSE-ENGINEERING-REPORT.md`](docs/00-REVERSE-ENGINEERING-REPORT.md)
+جزئیات: [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md) · نصب بدون SSH: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md) · یافته‌های مهندسی معکوس: [`docs/00-REVERSE-ENGINEERING-REPORT.md`](docs/00-REVERSE-ENGINEERING-REPORT.md)
 
 ---
 
@@ -98,14 +101,14 @@ wp plugin install ahangban-connector.zip --activate
 wp plugin list
 ```
 
-### پس از فعال‌سازی
+### پس از فعال‌سازی (وب‌هوک، بدون SSH)
 
-1. به منوی **آهنگ‌بان API** در پیشخوان بروید.
-2. وضعیت سلامت را بررسی کنید: `taxonomy_artist` باید ✅ باشد.
-3. توکن ۶۴-نویسه‌ای را کپی کنید (دکمهٔ «نمایش کامل توکن»).
-4. سلامت REST را تست کنید: باز کردن `https://ahangban.ir/wp-json/ahangban/v1/health` باید JSON برگرداند.
+1. به منوی **آهنگ‌بان API** بروید و توکن BotFather و شناسهٔ ادمین را وارد کنید.
+2. حالت `وب‌هوک` را انتخاب و ذخیره کنید؛ سپس «ست کردن وب‌هوک» را بزنید.
+3. در تلگرام `/start` بفرستید؛ برای مدیریت، `/admin` را بزنید.
+4. پنل سلامت REST: `https://ahangban.ir/wp-json/ahangban/v1/health`.
 
-> اگر `taxonomy_artist = ❌` بود: به `نمایش → سفارشی‌سازی` یا مستند `docs/ARTIST-ARCHIVE-DIAGNOSIS.md` در مخزن قالب مراجعه کنید. افزونه به‌صورت خودکار چیزی ثبت نمی‌کند.
+توکن ربات بعد از ذخیره در صفحه HTML نمایش داده نمی‌شود؛ فیلد خالی مقدار فعلی را حفظ می‌کند. اگر `taxonomy_artist = ❌` بود، تاکسونومی واقعی قالب/سایت را بررسی کنید؛ افزونه به‌صورت خودکار چیزی ثبت نمی‌کند.
 
 ---
 
@@ -222,9 +225,9 @@ sudo systemctl enable --now ahangbanbot
 journalctl -u ahangbanbot -f
 ```
 
-### گزینه C — Webhook (اگر polling مسدود است)
+### گزینه C — وب‌هوک داخلی وردپرس (دایرکت‌ادمین)
 
-در `.env` متغیر `WEBHOOK_URL=https://your-domain.com/webhook` تنظیم کنید و در وردپرس مسیر `POST /wp-json/ahangban/v1/webhook` را با `X-Telegram-Bot-Api-Secret-Token` امن کنید. سپس در کد `main.py` polling را با `webhook` جایگزین کنید (نمونه در `docs/`).
+در حالت اشتراکی نیازی به اجرای Python یا تعریف Webhook دستی نیست: افزونه v1.3.0 از پیشخوان توکن را می‌گیرد، Secret را تنظیم می‌کند و `POST /wp-json/ahangban/v1/telegram/webhook` را با Telegram ثبت می‌کند. مراحل کامل در [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md) آمده است.
 
 ---
 
@@ -261,11 +264,11 @@ curl -H "Authorization: Bearer $AHANGBAN_API_TOKEN" \
 
 - ✅ توکن‌ها فقط در `.env` و `wp_options (autoload=no)` — هرگز در گیت.
 - ✅ فقط `post_status=publish` برگردانده می‌شود.
-- ✅ Rate limit: افزونه ۶۰/دقیقه/IP + ۲۰۰/دقیقه/توکن (Transient)؛ ربات ۲۰/دقیقه/کاربر (SQLite).
-- ✅ اعتبارسنجی طول ورودی (≤۱۰۰)، مسدودسازی URL/اسپم، `sanitize_text_field`، `absint`، `hash_equals` برای توکن.
-- ✅ SSRF: فقط URLهای داخل DB (توسط مدیر وارد شده) HEAD می‌شوند؛ دامنه‌های خصوصی (`127.0.0.1`, `10.*`, `192.168.*`) مسدود.
-- ✅ لاگ بدون توکن/رمز؛ خطاهای داخلی به کاربر نمایش داده نمی‌شوند.
-- ✅ `file_id` کش برای جلوگیری از دانلود تکراری.
+- ✅ وب‌هوک Secret header را اجباری بررسی می‌کند؛ update تکراری و rate limit مدیریت می‌شود.
+- ✅ اعتبارسنجی ورودی، دسترسی ادمین بر اساس شناسهٔ تلگرام، و توکن‌های WordPress با `autoload=no`.
+- ✅ دریافت رسانه فقط با HTTPS؛ IP خصوصی/رزروشده، مقصد محلی و redirect ناامن رد می‌شوند. سقف آپلود محدود است؛ شکست به پیوند اصلیِ اثر می‌رسد.
+- ✅ لاگ‌ها توکن Bot API را ثبت نمی‌کنند؛ پیام‌های خطا به کاربر جزئیات فنی/محرمانه نمی‌دهند.
+- ✅ `file_id` برای صوت در transient وردپرس یا SQLite حالت Python cache می‌شود.
 
 ---
 

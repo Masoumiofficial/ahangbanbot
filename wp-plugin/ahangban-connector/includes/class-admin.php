@@ -79,6 +79,10 @@ class AhangBan_Admin {
                 // Telegram فقط https را می‌پذیرد
                 $url = set_url_scheme( $url, 'https' );
                 $secret = AhangBan_Settings::get_bot_secret();
+                if ( '' === $secret ) {
+                    add_settings_error( 'ahangban_connector', 'secret_missing', 'ساخت Secret وب‌هوک ناموفق بود؛ تنظیمات امنیتی هاست را بررسی کنید.', 'error' );
+                    return;
+                }
                 $res = self::telegram_api( $token, 'setWebhook', array(
                     'url' => $url,
                     'secret_token' => $secret,
@@ -135,7 +139,9 @@ class AhangBan_Admin {
         $bot_token_raw = AhangBan_Settings::get_bot_token();
         $bot_token_masked = AhangBan_Settings::mask_token( $bot_token_raw );
         $bot_username = AhangBan_Settings::get_bot_username();
-        $admin_ids_raw = get_option( AhangBan_Settings::OPTION_ADMIN_IDS, '' );
+        $admin_ids_raw = implode( ', ', AhangBan_Settings::get_admin_ids() );
+        $maybe_const_admin_ids = defined( 'AHANGBAN_ADMIN_IDS' ) && AHANGBAN_ADMIN_IDS;
+        $maybe_const_username = defined( 'AHANGBAN_BOT_USERNAME' ) && AHANGBAN_BOT_USERNAME;
         $bot_secret = AhangBan_Settings::get_bot_secret();
         $bot_mode = AhangBan_Settings::get_mode();
         $webhook_url = AhangBan_Settings::get_webhook_url();
@@ -144,7 +150,7 @@ class AhangBan_Admin {
         ?>
         <div class="wrap" dir="rtl" style="text-align:right">
             <h1>🔌 اتصال آهنگ‌بان — API ربات تلگرام <small style="color:#646970">v<?php echo esc_html(AHANGBAN_CONNECTOR_VERSION); ?></small></h1>
-            <p>این افزونه داده‌های منتشرشدهٔ سایت را از طریق REST امن در اختیار ربات تلگرام قرار می‌دهد. <strong>از v1.2.0 تنظیم توکن‌ها مستقیم از همین صفحه ممکن است — بدون SSH.</strong></p>
+            <p>این افزونه داده‌های منتشرشدهٔ سایت را از طریق REST امن در اختیار ربات تلگرام قرار می‌دهد. <strong>از v1.2.0 تنظیم توکن‌ها بدون SSH ممکن است؛ v1.3.0 ارسال فایل و پنل مدیریت ربات را هم اضافه می‌کند.</strong></p>
 
             <!-- 1. وضعیت سامانه -->
             <div style="background:#fff;border:1px solid #ccd0d4;border-radius:12px;padding:20px;margin:16px 0;max-width:920px">
@@ -180,21 +186,24 @@ class AhangBan_Admin {
                                     <p style="color:#d63638">⚠️ توکن از <code>wp-config.php</code> (ثابت <code>AHANGBAN_BOT_TOKEN</code>) خوانده می‌شود — برای ویرایش از اینجا، ثابت را حذف کنید.</p>
                                     <code dir="ltr"><?php echo esc_html( AhangBan_Settings::mask_token( AHANGBAN_BOT_TOKEN ) ); ?></code>
                                 <?php else: ?>
-                                    <input type="password" id="bot_token" name="bot_token" value="<?php echo esc_attr( $bot_token_raw ); ?>" dir="ltr" style="width:100%;max-width:520px;font-family:monospace" placeholder="123456789:AAH... از @BotFather">
-                                    <p class="description">از <a href="https://t.me/BotFather" target="_blank">@BotFather</a> → /newbot بگیرید. نمایش فعلی: <code dir="ltr"><?php echo esc_html($bot_token_masked); ?></code> — برای دیدن، روی «نمایش» کلیک کنید.</p>
-                                    <button type="button" class="button button-small" onclick="var i=document.getElementById('bot_token'); i.type=i.type==='password'?'text':'password'; this.textContent=i.type==='password'?'👁 نمایش':'🙈 مخفی'">👁 نمایش</button>
+                                    <input type="password" id="bot_token" name="bot_token" value="" autocomplete="new-password" dir="ltr" style="width:100%;max-width:520px;font-family:monospace" placeholder="برای حفظ امنیت، توکن ذخیره‌شده دوباره نمایش داده نمی‌شود">
+                                    <p class="description">از <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a> → /newbot بگیرید. وضعیت فعلی: <code dir="ltr"><?php echo esc_html($bot_token_masked); ?></code>. برای تغییر، توکن جدید را وارد کنید؛ خالی‌گذاشتن فیلد، توکن فعلی را حفظ می‌کند.</p>
                                 <?php endif; ?>
                             </td>
                         </tr>
                         <tr>
                             <th scope="row"><label for="bot_username">یوزرنیم ربات (اختیاری)</label></th>
-                            <td><input type="text" id="bot_username" name="bot_username" value="<?php echo esc_attr($bot_username); ?>" dir="ltr" style="width:320px" placeholder="ahangbanbot"> <span class="description">بدون @</span></td>
+                            <td>
+                                <input type="text" id="bot_username" name="bot_username" value="<?php echo esc_attr($bot_username); ?>" dir="ltr" style="width:320px" placeholder="ahangbanbot" <?php disabled( $maybe_const_username ); ?>> <span class="description">بدون @</span>
+                                <?php if ( $maybe_const_username ): ?><p class="description">از ثابت <code>AHANGBAN_BOT_USERNAME</code> در wp-config.php خوانده می‌شود.</p><?php endif; ?>
+                            </td>
                         </tr>
                         <tr>
                             <th scope="row"><label for="admin_ids">شناسه ادمین‌ها</label></th>
                             <td>
-                                <input type="text" id="admin_ids" name="admin_ids" value="<?php echo esc_attr($admin_ids_raw); ?>" dir="ltr" style="width:100%;max-width:520px" placeholder="123456789, 987654321">
-                                <p class="description">با کاما جدا کنید. برای یافتن ID خود به <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> پیام دهید.</p>
+                                <input type="text" id="admin_ids" name="admin_ids" value="<?php echo esc_attr($admin_ids_raw); ?>" dir="ltr" style="width:100%;max-width:520px" placeholder="123456789, 987654321" <?php disabled( $maybe_const_admin_ids ); ?>>
+                                <p class="description">با کاما جدا کنید. برای یافتن ID خود به <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer">@userinfobot</a> پیام دهید.</p>
+                                <?php if ( $maybe_const_admin_ids ): ?><p class="description">از ثابت <code>AHANGBAN_ADMIN_IDS</code> در wp-config.php خوانده می‌شود.</p><?php endif; ?>
                             </td>
                         </tr>
                         <tr>

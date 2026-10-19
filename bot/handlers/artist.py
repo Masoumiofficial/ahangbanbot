@@ -1,5 +1,7 @@
 import math
 import logging
+import uuid
+import html
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -23,21 +25,28 @@ async def artists_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     page = 1
     letter = ""
     q = ""
+    query_token = ""
     if update.callback_query:
         data = update.callback_query.data
-        # formats: artists:page:2  or artists:letter:م  or artists:page:1:q:...:l:...
+        # Formats: artists:page:2, artists:letter:م, artists:page:2:qref:TOKEN
         parts = data.split(":")
         if len(parts) >= 3 and parts[1] == "page":
-            try: page = int(parts[2])
-            except: pass
-            # extra params :q:xxx :l:xxx
-            if ":q:" in data:
-                q = data.split(":q:")[1].split(":l:")[0]
+            try:
+                page = max(1, int(parts[2]))
+            except ValueError:
+                page = 1
+            if ":qref:" in data:
+                query_token = data.rsplit(":qref:", 1)[1].split(":l:")[0]
+                q = context.user_data.get("artist_query_tokens", {}).get(query_token, "")
             if ":l:" in data:
-                letter = data.split(":l:")[-1]
+                letter = data.rsplit(":l:", 1)[1]
         elif len(parts) >= 3 and parts[1] == "letter":
             letter = parts[2]
             page = 1
+        if query_token and not q:
+            await update.callback_query.answer("جست‌وجو منقضی شده است.", show_alert=True)
+            await update.callback_query.edit_message_text("جست‌وجوی خواننده منقضی شده؛ دوباره نام را بنویسید.")
+            return
         await update.callback_query.answer()
         await update.callback_query.edit_message_text("⏳ در حال بارگذاری خوانندگان…")
         chat = update.callback_query.message.chat
@@ -70,26 +79,40 @@ async def artists_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     header = f"🎤 <b>فهرست خوانندگان</b> — {total:,} هنرمند".replace(",", "٬")
     if letter:
-        header += f" (حرف «{letter}»)"
+        header += f" (حرف «{html.escape(letter)}»)"
     if q:
-        header += f" — جست‌وجو: «{q}»"
+        header += f" — جست‌وجو: «{html.escape(q)}»"
     header += f"\nصفحه {page} از {total_pages}\n"
 
     lines = []
     keyboard = []
     for item in results:
-        count = item.get("count", 0)
-        name = item.get("name") or ""
-        slug = item.get("slug") or item.get("term_id")
-        # Persian digits?
-        lines.append(f"• <b>{name}</b> — {count} اثر")
-        keyboard.append([InlineKeyboardButton(f"🎤 {name} ({count})", callback_data=f"artist:{slug}")])
+        count = int(item.get("count", 0) or 0)
+        name = str(item.get("name") or "")
+        identifier = item.get("term_id") or item.get("slug")
+        lines.append(f"• <b>{html.escape(name)}</b> — {count} اثر")
+        keyboard.append([InlineKeyboardButton(f"🎤 {name[:45]} ({count})", callback_data=f"artist:{identifier}")])
 
     text = header + "\n" + "\n".join(lines)
 
-    pagination_kb = artists_list_pagination(page, total_pages, query=q, letter=letter)
-    # Merge result buttons + pagination
-    all_buttons = keyboard + pagination_kb.inline_keyboard
+    if q:
+        query_tokens = context.user_data.setdefault("artist_query_tokens", {})
+        if not query_token:
+            query_token = uuid.uuid4().hex[:10]
+        query_tokens[query_token] = q
+        while len(query_tokens) > 20:
+            query_tokens.pop(next(iter(query_tokens)))
+        nav = []
+        if page > 1:
+            nav.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"artists:page:{page-1}:qref:{query_token}"))
+        nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"artists:page:{page+1}:qref:{query_token}"))
+        pagination_rows = [nav, [InlineKeyboardButton("🏠 خانه", callback_data="home")]]
+    else:
+        pagination_kb = artists_list_pagination(page, total_pages, letter=letter)
+        pagination_rows = pagination_kb.inline_keyboard
+    all_buttons = keyboard + pagination_rows
 
     await send_fn(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
     await increment_stat("artist_views")
@@ -235,8 +258,14 @@ async def artist_text_search(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Show as quick list
     keyboard = []
     for item in results[:8]:
-        keyboard.append([InlineKeyboardButton(f"🎤 {item['name']} ({item['count']})", callback_data=f"artist:{item['slug']}")])
-    keyboard.append([InlineKeyboardButton("🔍 همهٔ نتایج خوانندگان", callback_data="artists:page:1:q:" + text)])
+        identifier = item.get("term_id") or item.get("slug")
+        keyboard.append([InlineKeyboardButton(f"🎤 {str(item.get('name') or '')[:45]} ({item.get('count', 0)})", callback_data=f"artist:{identifier}")])
+    query_token = uuid.uuid4().hex[:10]
+    query_tokens = context.user_data.setdefault("artist_query_tokens", {})
+    query_tokens[query_token] = text
+    while len(query_tokens) > 20:
+        query_tokens.pop(next(iter(query_tokens)))
+    keyboard.append([InlineKeyboardButton("🔍 همهٔ نتایج خوانندگان", callback_data=f"artists:page:1:qref:{query_token}")])
     await update.message.reply_text(
         f"🎤 خوانندگان یافت‌شده برای «{text}»:\n" + "\n".join([f"• {r['name']} ({r['count']})" for r in results[:5]]),
         reply_markup=InlineKeyboardMarkup(keyboard),

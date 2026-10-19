@@ -103,8 +103,13 @@ async def is_blocked(user_id: int) -> bool:
             return bool(row and row["blocked"])
 
 async def set_blocked(user_id: int, blocked: bool):
+    now = int(time.time())
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE users SET blocked=? WHERE user_id=?", (1 if blocked else 0, user_id))
+        await db.execute("""
+            INSERT INTO users (user_id, created_at, last_seen, blocked)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET blocked=excluded.blocked
+        """, (user_id, now, now, 1 if blocked else 0))
         await db.commit()
 
 async def count_users(active_days: int = 7) -> dict:
