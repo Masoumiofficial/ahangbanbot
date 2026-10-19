@@ -39,7 +39,7 @@ async def ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ اتصال به آهنگ‌بان برقرار است\n"
             f"🔧 وردپرس: {data.get('wp')}\n"
             f"🐍 PHP: {data.get('php')}\n"
-            f"🎤 تاکسونومی singer: {'فعال' if data.get('taxonomy_singer') else 'غیرفعال'}\n"
+            f"🎤 تاکسونومی artist: {'فعال' if data.get('taxonomy_artist') else 'غیرفعال'}\n"
             f"🎵 آثار منتشرشده: {data.get('post_count')}\n"
             f"⏰ زمان سرور: {data.get('time')}"
         )

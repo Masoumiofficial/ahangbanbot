@@ -14,7 +14,7 @@
 ### نتیجه: **معماری هیبرید — افزونهٔ رابط امن + سرویس ربات مستقل**
 
 ```
-[کاربر تلگرام] ⇄ Telegram Bot API ⇄ [سرویس ربات Python] ⇄ HTTPS+Token ⇄ [افزونه ahangban-connector @ WP ] ⇄ WP DB (post/singer/postmeta/termmeta)
+[کاربر تلگرام] ⇄ Telegram Bot API ⇄ [سرویس ربات Python] ⇄ HTTPS+Token ⇄ [افزونه ahangban-connector @ WP ] ⇄ WP DB (post/artist/postmeta/termmeta)
                                          ↕
                                    SQLite محلی (کش، وضعیت گفتگو، علاقه‌مندی‌ها، rate-limit)
 ```

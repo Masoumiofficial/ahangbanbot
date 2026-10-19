@@ -25,7 +25,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = await get_stats()
     try:
         health = await api.health()
-        health_line = f"✅ WP {health.get('wp')} | PHP {health.get('php')} | آثار: {health.get('post_count')} | singer: {'فعال' if health.get('taxonomy_singer') else 'غیرفعال'}"
+        health_line = f"✅ WP {health.get('wp')} | PHP {health.get('php')} | آثار: {health.get('post_count')} | artist: {'فعال' if health.get('taxonomy_artist') else 'غیرفعال'}"
     except Exception as e:
         health_line = f"❌ خطا در health: {e}"
 

@@ -24,7 +24,7 @@ RATE_LIMIT_PER_MINUTE = int(_env("RATE_LIMIT_PER_MINUTE", "20") or 20)
 BRAND = {
     "name": "آهنگ‌بان",
     "site": "https://ahangban.ir",
-    "singers_path": "https://ahangban.ir/singers/",
+    "artists_path": "https://ahangban.ir/artists/",
     "color": "#185ADB",
 }
 

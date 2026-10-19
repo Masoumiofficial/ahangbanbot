@@ -100,7 +100,10 @@ class AhangBan_API {
             'version' => AHANGBAN_CONNECTOR_VERSION,
             'wp' => get_bloginfo( 'version' ),
             'php' => PHP_VERSION,
-            'taxonomy_singer' => taxonomy_exists( 'singer' ),
+            'taxonomy_artist' => taxonomy_exists( 'artist' ),
+            'taxonomy'       => AhangBan_Search::get_taxonomy(),
+            'taxonomy_exists'=> taxonomy_exists( AhangBan_Search::get_taxonomy() ),
+            'legacy_singer'  => taxonomy_exists( 'singer' ),
             'post_count' => (int) wp_count_posts( 'post' )->publish,
             'time' => current_time( 'mysql', true ),
         ) );
