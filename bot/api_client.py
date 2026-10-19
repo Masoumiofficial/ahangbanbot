@@ -27,7 +27,11 @@ class AhangBanAPI:
 
     def _get_client(self) -> httpx.AsyncClient:
         if not self._client or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+            self._client = httpx.AsyncClient(
+                timeout=self.timeout,
+                follow_redirects=False,
+                limits=httpx.Limits(max_connections=30, max_keepalive_connections=10),
+            )
         return self._client
 
     async def close(self):
@@ -67,21 +71,33 @@ class AhangBanAPI:
         client = self._get_client()
         # Retry with backoff for transient errors
         last_exc = None
+        last_status = 0
         for attempt in range(3):
             try:
                 resp = await client.request(method, url, params=params, headers=self._headers())
                 if resp.status_code == 429:
-                    # Rate limited by plugin — wait and retry
-                    wait = int(resp.headers.get("Retry-After", "2"))
-                    log.warning("rate limited, waiting %ss", wait)
-                    await asyncio.sleep(min(wait, 5))
+                    # Honor Retry-After, but keep the interaction responsive and bounded.
+                    last_status = 429
+                    try:
+                        wait = float(resp.headers.get("Retry-After", "2"))
+                    except (TypeError, ValueError):
+                        wait = 2.0
+                    wait = max(0.0, min(wait, 3.0))
+                    log.warning("API rate limited; retry %d/3 after %.1fs", attempt + 1, wait)
+                    if attempt < 2:
+                        await asyncio.sleep(wait)
                     continue
+                if 300 <= resp.status_code < 400:
+                    raise APIError(resp.status_code, "آدرس API سایت تغییر مسیر داد؛ نشانی پایه را بررسی کنید.")
                 resp.raise_for_status()
                 data = resp.json()
                 if use_cache and method == "GET":
                     self._cache_set(cache_key, data)
                 return data
+            except APIError:
+                raise
             except httpx.HTTPStatusError as e:
+                last_status = e.response.status_code
                 # Don't retry 4xx (except 429 already handled)
                 if 400 <= e.response.status_code < 500:
                     body = ""
@@ -90,16 +106,29 @@ class AhangBanAPI:
                         body = j.get("message") or j.get("code") or str(j)
                     except Exception:
                         body = e.response.text[:500]
-                    log.error("API %s %s → %s %s", method, url, e.response.status_code, body)
+                    log.error("API %s %s → %s %s", method, path, e.response.status_code, body)
                     raise APIError(e.response.status_code, body) from e
                 last_exc = e
-                log.warning("transient %s attempt %d: %s", url, attempt + 1, e)
-                await asyncio.sleep(0.5 * (attempt + 1))
+                log.warning("transient API server response %s on attempt %d", e.response.status_code, attempt + 1)
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.TimeoutException) as e:
                 last_exc = e
-                log.warning("network error attempt %d: %s", attempt + 1, e)
-                await asyncio.sleep(1 * (attempt + 1))
-        raise APIError(0, f"ارتباط با سایت برقرار نشد: {last_exc}") from last_exc
+                last_status = 0
+                log.warning("API network error on attempt %d (%s)", attempt + 1, type(e).__name__)
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+            except ValueError as e:
+                last_exc = e
+                last_status = 502
+                log.warning("API returned invalid JSON for %s", path)
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        if last_status == 429:
+            raise APIError(429, "سایت در حال حاضر درخواست‌های زیادی دریافت می‌کند؛ چند لحظهٔ دیگر دوباره تلاش کنید.") from last_exc
+        if last_status >= 500:
+            raise APIError(last_status, "پاسخ سایت موقتاً در دسترس نیست؛ دوباره تلاش کنید.") from last_exc
+        raise APIError(0, "ارتباط با سایت برقرار نشد؛ اتصال HTTPS را بررسی و دوباره تلاش کنید.") from last_exc
 
     # ---- Public methods ----
 

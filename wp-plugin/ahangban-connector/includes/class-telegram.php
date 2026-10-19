@@ -15,6 +15,137 @@ class AhangBan_Telegram {
         self::maybe_install_tables();
         add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) );
         add_action( 'ahangban_bot_process_broadcast', array( __CLASS__, 'process_broadcast_batch' ), 10, 1 );
+        // wp_after_insert_post runs after post metadata (including ACF musics_type/media fields) is saved.
+        add_action( 'wp_after_insert_post', array( __CLASS__, 'queue_channel_announcement_after_insert' ), 10, 4 );
+        add_action( 'ahangban_bot_send_channel_announcement', array( __CLASS__, 'send_channel_announcement' ), 10, 1 );
+    }
+
+    /** Only classify verified music records; never broadcast an arbitrary WordPress post. */
+    private static function is_music_post( $post ) {
+        if ( ! is_object( $post ) || 'post' !== $post->post_type || (int) $post->ID <= 0 ) { return false; }
+
+        $raw_type = trim( (string) get_post_meta( (int) $post->ID, 'musics_type', true ) );
+        if ( '' !== $raw_type && in_array( AhangBan_Search::classify_type( $raw_type ), array( 'audio', 'video', 'album' ), true ) ) {
+            return true;
+        }
+
+        // The reverse-engineered theme uses these exact ACF/meta keys for downloadable music media.
+        foreach ( array( 'music128', 'music320', 'album128', 'album320', 'video480', 'video720', 'video1080' ) as $meta_key ) {
+            if ( '' !== trim( (string) get_post_meta( (int) $post->ID, $meta_key, true ) ) ) { return true; }
+        }
+        return false;
+    }
+
+    /** Inspect post metadata only after WordPress/ACF have completed saving it. */
+    public static function queue_channel_announcement_after_insert( $post_id, $post, $update, $post_before ) {
+        if ( ! is_object( $post ) ) { return; }
+        $old_status = is_object( $post_before ) ? (string) $post_before->post_status : '';
+        self::queue_channel_announcement( (string) $post->post_status, $old_status, $post );
+    }
+
+    /** Queue newly published music records instead of slowing the WordPress editor with Telegram HTTP calls. */
+    public static function queue_channel_announcement( $new_status, $old_status, $post ) {
+        if ( 'publish' !== $new_status || 'publish' === $old_status || ! self::is_music_post( $post ) ) { return; }
+        if ( ! AhangBan_Settings::is_channel_auto_post_enabled() || '' === AhangBan_Settings::get_channel_target() || '' === AhangBan_Settings::get_bot_token() ) { return; }
+
+        $post_id = (int) $post->ID;
+        $status_key = '_ahangban_tg_channel_announcement_status';
+        $status = (string) get_post_meta( $post_id, $status_key, true );
+        if ( in_array( $status, array( 'pending', 'sent', 'unknown' ), true ) ) { return; }
+
+        update_post_meta( $post_id, $status_key, 'pending' );
+        $scheduled = wp_schedule_single_event( time() + 10, 'ahangban_bot_send_channel_announcement', array( $post_id ) );
+        if ( is_wp_error( $scheduled ) || ( false === $scheduled && ! wp_next_scheduled( 'ahangban_bot_send_channel_announcement', array( $post_id ) ) ) ) {
+            update_post_meta( $post_id, $status_key, 'failed' );
+            error_log( '[AhangBan Telegram] Could not queue channel announcement for post ' . $post_id . '.' );
+        }
+    }
+
+    /** Publish a compact announcement with links back to the canonical post and bot deep link. */
+    public static function send_channel_announcement( $post_id ) {
+        $post_id = (int) $post_id;
+        if ( $post_id <= 0 || 'pending' !== (string) get_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', true ) ) { return; }
+        $post = get_post( $post_id );
+        if ( ! $post || 'publish' !== $post->post_status || ! self::is_music_post( $post ) ) {
+            update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'cancelled' );
+            return;
+        }
+        $target = AhangBan_Settings::get_channel_target();
+        if ( ! AhangBan_Settings::is_channel_auto_post_enabled() || '' === $target || '' === AhangBan_Settings::get_bot_token() ) {
+            update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'cancelled' );
+            return;
+        }
+
+        $song = AhangBan_Search::get_single( $post_id );
+        if ( ! is_array( $song ) ) {
+            update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'failed' );
+            return;
+        }
+        $caption = self::channel_caption( $song );
+        $keyboard = self::channel_keyboard( $song );
+        $photo_status = self::send_card_photo( $target, $song, $caption, $keyboard );
+
+        if ( 'sent' === $photo_status['status'] ) {
+            self::mark_channel_announcement_sent( $post_id, $photo_status['response'] );
+            return;
+        }
+        if ( 'unknown' === $photo_status['status'] ) {
+            // A timeout is ambiguous: Telegram may already have delivered the image. Do not retry and duplicate it.
+            update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'unknown' );
+            return;
+        }
+
+        $response = self::send( $target, $caption, $keyboard );
+        if ( self::telegram_ok( $response ) ) {
+            self::mark_channel_announcement_sent( $post_id, $response );
+        } else {
+            update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', is_wp_error( $response ) ? 'unknown' : 'failed' );
+        }
+    }
+
+    private static function mark_channel_announcement_sent( $post_id, $response ) {
+        $message_id = is_array( $response ) ? (int) ( $response['result']['message_id'] ?? 0 ) : 0;
+        update_post_meta( (int) $post_id, '_ahangban_tg_channel_announcement_status', 'sent' );
+        if ( $message_id > 0 ) { update_post_meta( (int) $post_id, '_ahangban_tg_channel_message_id', $message_id ); }
+    }
+
+    private static function channel_caption( $song ) {
+        $title = self::esc( self::text_limit( $song['song'] ?? $song['title'] ?? 'آهنگ جدید', 100 ) );
+        $artist = self::esc( self::text_limit( $song['artist'] ?? '', 90 ) );
+        $permalink = esc_url( $song['permalink'] ?? '', array( 'http', 'https' ) );
+        $caption = "🎶 <b>اثر تازه در آهنگ‌بان</b>\n\n🎵 <b>{$title}</b>";
+        if ( '' !== $artist ) { $caption .= "\n👤 {$artist}"; }
+        if ( $permalink ) { $caption .= "\n🔗 <a href=\"{$permalink}\">مشاهدهٔ صفحهٔ رسمی</a>"; }
+        return self::text_limit( $caption, 850 );
+    }
+
+    private static function channel_keyboard( $song ) {
+        $rows = array();
+        $username = AhangBan_Settings::get_bot_username();
+        $song_id = (int) ( $song['id'] ?? 0 );
+        if ( '' !== $username && $song_id > 0 ) {
+            $rows[] = array( array( 'text' => '🎧 مشاهده و دریافت در ربات', 'url' => 'https://t.me/' . rawurlencode( $username ) . '?start=song_' . $song_id ) );
+        }
+        $permalink = esc_url( $song['permalink'] ?? '', array( 'http', 'https' ) );
+        if ( $permalink ) { $rows[] = array( array( 'text' => '🌐 صفحهٔ آهنگ در سایت', 'url' => $permalink ) ); }
+        return $rows ? array( 'inline_keyboard' => $rows ) : null;
+    }
+
+    /** Try the large cover first, then a medium fallback; never duplicate a send after a transport timeout. */
+    private static function send_card_photo( $chat_id, $item, $caption, $keyboard = null ) {
+        $primary = $item['cover'] ?? $item['image'] ?? '';
+        $fallback = $item['cover_fallback'] ?? $item['image_fallback'] ?? '';
+        $urls = array_unique( array_filter( array( $primary, $fallback ) ) );
+        $attempted = false;
+        foreach ( $urls as $url ) {
+            $photo = self::safe_media_url( $url );
+            if ( ! $photo ) { continue; }
+            $attempted = true;
+            $response = self::send_photo( $chat_id, $photo, $caption, $keyboard );
+            if ( self::telegram_ok( $response ) ) { return array( 'status' => 'sent', 'response' => $response ); }
+            if ( is_wp_error( $response ) ) { return array( 'status' => 'unknown', 'response' => $response ); }
+        }
+        return array( 'status' => $attempted ? 'rejected' : 'unavailable', 'response' => null );
     }
 
     private static function users_table() {
@@ -602,6 +733,12 @@ class AhangBan_Telegram {
         return self::api_call( 'editMessageText', $p );
     }
 
+    private static function edit_caption( $chat_id, $mid, $caption, $kb = null ) {
+        $p = array( 'chat_id' => $chat_id, 'message_id' => $mid, 'caption' => $caption, 'parse_mode' => 'HTML' );
+        if ( $kb ) { $p['reply_markup'] = $kb; }
+        return self::api_call( 'editMessageCaption', $p );
+    }
+
     // ---------- Core logic ----------
     public static function process_update( $u ) {
         $from_id = 0;
@@ -644,11 +781,12 @@ class AhangBan_Telegram {
         if ( ! $chat || '' === $text ) { return; }
 
         if ( '/' === substr( $text, 0, 1 ) ) {
+            if ( $from_id > 0 ) { delete_transient( 'ahangban_tg_flow_' . $from_id ); }
             $tokens = preg_split( '/\\s+/', $text, 2 );
             $command = strtolower( explode( '@', $tokens[0] )[0] );
             $arg = isset( $tokens[1] ) ? trim( $tokens[1] ) : '';
             switch ( $command ) {
-                case '/start': self::handle_start( $chat, $msg ); return;
+                case '/start': self::handle_start( $chat, $msg, $arg ); return;
                 case '/help': self::handle_help( $chat, $from_id ); return;
                 case '/ping': self::handle_ping( $chat ); return;
                 case '/latest': self::handle_latest( $chat, 1 ); return;
@@ -677,14 +815,31 @@ class AhangBan_Telegram {
 
         $shortcuts = array(
             '🔍 جست‌وجوی آهنگ' => function() use ( $chat ) { self::send( $chat, '🎵 نام آهنگ را بنویسید؛ مثلاً: بی‌تاب محسن یگانه' ); },
-            '👤 جست‌وجوی خواننده' => function() use ( $chat ) { self::send( $chat, '🎤 نام خواننده را بنویسید؛ مثلاً: معین یا گوگوش' ); },
+            '👤 جست‌وجوی خواننده' => function() use ( $chat, $from_id ) {
+                set_transient( 'ahangban_tg_flow_' . (int) $from_id, array( 'action' => 'await_artist' ), 10 * MINUTE_IN_SECONDS );
+                self::send( $chat, '🎤 نام خواننده را در پیام بعدی بنویسید؛ مثلاً: معین یا گوگوش', self::home_kb() );
+            },
             '🆕 جدیدترین‌ها' => function() use ( $chat ) { self::handle_latest( $chat, 1 ); },
             '🔥 محبوب‌ترین‌ها' => function() use ( $chat ) { self::handle_popular( $chat, 1 ); },
             '🎤 فهرست خوانندگان' => function() use ( $chat ) { self::handle_artists_list( $chat, 1 ); },
             'ℹ️ راهنما' => function() use ( $chat, $from_id ) { self::handle_help( $chat, $from_id ); },
             '🛠 مدیریت' => function() use ( $chat, $from_id ) { self::handle_admin_menu( $chat, $from_id ); },
         );
-        if ( isset( $shortcuts[ $text ] ) ) { $shortcuts[ $text ](); return; }
+        if ( isset( $shortcuts[ $text ] ) ) {
+            if ( '👤 جست‌وجوی خواننده' !== $text && $from_id > 0 ) { delete_transient( 'ahangban_tg_flow_' . $from_id ); }
+            $shortcuts[ $text ]();
+            return;
+        }
+
+        if ( $from_id > 0 && '/' !== substr( $text, 0, 1 ) ) {
+            $flow_key = 'ahangban_tg_flow_' . $from_id;
+            $flow = get_transient( $flow_key );
+            if ( is_array( $flow ) && 'await_artist' === ( $flow['action'] ?? '' ) ) {
+                delete_transient( $flow_key );
+                self::handle_artist_search( $chat, $text );
+                return;
+            }
+        }
 
         self::handle_search( $chat, $text, 1, $from_id );
     }
@@ -703,7 +858,7 @@ class AhangBan_Telegram {
         $rows = array(
             array( array( 'text' => '🔍 جست‌وجو', 'callback_data' => 'prompt:search' ) ),
             array( array( 'text' => '🆕 جدیدترین‌ها', 'callback_data' => 'browse:latest:1' ), array( 'text' => '🔥 محبوب‌ترین‌ها', 'callback_data' => 'browse:popular:1' ) ),
-            array( array( 'text' => '🎤 همهٔ خوانندگان', 'callback_data' => 'artists:page:1' ) ),
+            array( array( 'text' => '👤 جست‌وجوی خواننده', 'callback_data' => 'prompt:artist' ), array( 'text' => '🎤 همهٔ خوانندگان', 'callback_data' => 'artists:page:1' ) ),
             array( array( 'text' => 'ℹ️ راهنما', 'callback_data' => 'help' ) ),
         );
         if ( $is_admin ) { $rows[] = array( array( 'text' => '🛠 مدیریت ربات', 'callback_data' => 'admin:menu' ) ); }
@@ -802,12 +957,31 @@ class AhangBan_Telegram {
     }
 
     // ---- Handlers ----
-    private static function handle_start( $chat, $msg ) {
+    private static function handle_start( $chat, $msg, $payload = '' ) {
+        $payload = trim( (string) $payload );
+        if ( preg_match( '/^song_([1-9][0-9]*)$/', $payload, $match ) ) {
+            // Telegram deep link from a channel opens the exact real WordPress item immediately.
+            self::handle_song_card( $chat, (int) $match[1] );
+            return;
+        }
         $name = $msg['from']['first_name'] ?? '';
         $user_id = (int) ( $msg['from']['id'] ?? 0 );
         $is_admin = AhangBan_Settings::is_admin( $user_id );
+        // A single inline menu is clearer than sending a second, duplicate reply-keyboard message.
         self::send( $chat, self::welcome_text( $name ), self::main_kb( $is_admin ) );
-        self::api_call( 'sendMessage', array( 'chat_id' => $chat, 'text' => '⬇️ میانبر سریع', 'reply_markup' => self::reply_kb( $is_admin ) ) );
+    }
+
+    private static function handle_song_card( $chat, $song_id ) {
+        $song = AhangBan_Search::get_single( (int) $song_id );
+        if ( ! $song ) {
+            self::send( $chat, '❌ این اثر دیگر منتشرشده نیست یا در سایت پیدا نشد.', self::main_kb(), null );
+            return;
+        }
+        $caption = self::song_caption( $song );
+        $keyboard = self::song_kb( $song );
+        $photo_result = self::send_card_photo( $chat, $song, $caption, $keyboard );
+        if ( 'sent' === $photo_result['status'] || 'unknown' === $photo_result['status'] ) { return; }
+        self::send( $chat, $caption, $keyboard );
     }
 
     private static function handle_help( $chat, $user_id = 0 ) {
@@ -973,6 +1147,30 @@ class AhangBan_Telegram {
         self::send( $chat, implode( "\n", $lines ), array( 'inline_keyboard' => $rows ) );
     }
 
+    private static function handle_artist_search( $chat, $name ) {
+        $name = trim( (string) $name );
+        if ( ! self::is_valid_query( $name ) ) {
+            self::send( $chat, '⚠️ نام خواننده باید بین ۲ تا ۱۰۰ نویسه باشد.', self::home_kb(), null );
+            return;
+        }
+        $list = AhangBan_Search::get_artists( array( 'q' => $name, 'page' => 1, 'per_page' => 8, 'sort' => 'name' ) );
+        if ( is_wp_error( $list ) || empty( $list['results'] ) ) {
+            self::send( $chat, '😕 خواننده‌ای با این نام پیدا نشد؛ نام دیگری را امتحان کنید.', self::home_kb() );
+            return;
+        }
+        $rows = array();
+        $lines = array( '🎤 <b>خوانندگان پیدا‌شده برای «' . self::esc( self::text_limit( $name, 100 ) ) . '»</b>', '' );
+        foreach ( array_slice( $list['results'], 0, 8 ) as $artist ) {
+            $term_id = (int) ( $artist['term_id'] ?? 0 );
+            $artist_name = self::text_limit( $artist['name'] ?? 'هنرمند', 55 );
+            $count = (int) ( $artist['count'] ?? 0 );
+            $lines[] = '• <b>' . self::esc( $artist_name ) . '</b> — ' . number_format_i18n( $count ) . ' اثر';
+            if ( $term_id > 0 ) { $rows[] = array( array( 'text' => '🎤 ' . $artist_name, 'callback_data' => 'artist:' . $term_id ) ); }
+        }
+        $rows[] = array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) );
+        self::send( $chat, implode( "\n", $lines ), array( 'inline_keyboard' => $rows ) );
+    }
+
     private static function handle_artist_by_name( $chat, $name, $page ) {
         $list = AhangBan_Search::get_artists( array( 'q' => $name, 'page' => 1, 'per_page' => 5, 'sort' => 'name' ) );
         if ( is_wp_error( $list ) || empty( $list['results'] ) ) {
@@ -1042,13 +1240,11 @@ class AhangBan_Telegram {
         }
         $rows[] = array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) );
         $keyboard = array( 'inline_keyboard' => $rows );
-        $photo = self::safe_media_url( $term['image'] ?? '' );
-        if ( $photo && 1 === $page ) {
-            $response = self::send_photo( $chat, $photo, $caption, $keyboard );
-            if ( ! self::telegram_ok( $response ) ) { self::send( $chat, $caption, $keyboard ); }
-        } else {
-            self::send( $chat, $caption, $keyboard );
+        if ( 1 === $page ) {
+            $photo_result = self::send_card_photo( $chat, $term, $caption, $keyboard );
+            if ( 'sent' === $photo_result['status'] || 'unknown' === $photo_result['status'] ) { return; }
         }
+        self::send( $chat, $caption, $keyboard );
     }
 
     private static function is_admin( $user_id ) {
@@ -1074,8 +1270,12 @@ class AhangBan_Telegram {
         $downloads = $available ? number_format_i18n( (int) ( $stats['downloads'] ?? 0 ) ) : '—';
         $posts = wp_count_posts( 'post' );
         $published = ( $posts && isset( $posts->publish ) ) ? number_format_i18n( (int) $posts->publish ) : '—';
-        $state_note = $available ? 'آمار از زمان فعال‌شدن v1.3.0 در همین دیتابیس وردپرس ثبت می‌شود.' : '⚠️ جدول آمار در دسترس نیست؛ مجوز ساخت جدول دیتابیس را بررسی کنید.';
-        return "🛠 <b>پنل مدیریت آهنگ‌بان</b>\n\n👥 کاربران ثبت‌شده: <b>{$total}</b>\n🟢 فعال در ۷ روز اخیر: <b>{$active}</b>\n⛔ مسدود: <b>{$blocked}</b>\n🔍 جست‌وجوهای ثبت‌شده: <b>{$searches}</b>\n⬇️ ارسال‌های موفق فایل: <b>{$downloads}</b>\n🎵 آثار منتشرشده: <b>{$published}</b>\n\n{$state_note}";
+        $channel = AhangBan_Settings::get_channel_target();
+        $channel_status = $channel
+            ? self::esc( $channel ) . ( AhangBan_Settings::is_channel_auto_post_enabled() ? ' · خودکار روشن' : ' · خودکار خاموش' )
+            : 'تنظیم نشده';
+        $state_note = $available ? 'آمار از زمان فعال‌شدن افزونه در همین دیتابیس وردپرس ثبت می‌شود.' : '⚠️ جدول آمار در دسترس نیست؛ مجوز ساخت جدول دیتابیس را بررسی کنید.';
+        return "🛠 <b>پنل مدیریت آهنگ‌بان</b>\n\n👥 کاربران ثبت‌شده: <b>{$total}</b>\n🟢 فعال در ۷ روز اخیر: <b>{$active}</b>\n⛔ مسدود: <b>{$blocked}</b>\n🔍 جست‌وجوهای ثبت‌شده: <b>{$searches}</b>\n⬇️ ارسال‌های موفق فایل: <b>{$downloads}</b>\n🎵 آثار منتشرشده: <b>{$published}</b>\n📣 کانال: <b>{$channel_status}</b>\n\n{$state_note}";
     }
 
     private static function handle_admin_menu( $chat, $from_id ) {
@@ -1291,6 +1491,7 @@ class AhangBan_Telegram {
         $message_id = (int) ( $cb['message']['message_id'] ?? 0 );
         $user_id = (int) ( $cb['from']['id'] ?? 0 );
         if ( '' === $data || ! $chat ) { if ( $callback_id ) { self::answer_cb( $callback_id ); } return; }
+        if ( 'prompt:artist' !== $data && $user_id > 0 ) { delete_transient( 'ahangban_tg_flow_' . $user_id ); }
 
         if ( self::starts_with( $data, 'admin:' ) ) {
             self::handle_admin_callback( $data, $chat, $message_id, $callback_id, $user_id );
@@ -1300,15 +1501,23 @@ class AhangBan_Telegram {
         if ( 'home' === $data ) {
             self::answer_cb( $callback_id );
             $text = "🏠 <b>منوی اصلی آهنگ‌بان</b>\nنام آهنگ یا خواننده را بنویسید یا یکی از گزینه‌ها را انتخاب کنید.";
-            $result = self::edit_text( $chat, $message_id, $text, self::main_kb( self::is_admin( $user_id ) ) );
-            if ( ! self::telegram_ok( $result ) ) { self::send( $chat, $text, self::main_kb( self::is_admin( $user_id ) ) ); }
+            $keyboard = self::main_kb( self::is_admin( $user_id ) );
+            $has_media = ! empty( $cb['message']['photo'] ) || ! empty( $cb['message']['video'] ) || ! empty( $cb['message']['audio'] ) || ! empty( $cb['message']['document'] );
+            $result = $has_media
+                ? self::edit_caption( $chat, $message_id, $text, $keyboard )
+                : self::edit_text( $chat, $message_id, $text, $keyboard );
+            if ( ! self::telegram_ok( $result ) && ! is_wp_error( $result ) ) { self::send( $chat, $text, $keyboard ); }
             return;
         }
         if ( 'help' === $data ) {
             self::answer_cb( $callback_id );
             $text = self::help_text();
-            $result = self::edit_text( $chat, $message_id, $text, self::main_kb( self::is_admin( $user_id ) ) );
-            if ( ! self::telegram_ok( $result ) ) { self::send( $chat, $text, self::main_kb( self::is_admin( $user_id ) ) ); }
+            $keyboard = self::main_kb( self::is_admin( $user_id ) );
+            $has_media = ! empty( $cb['message']['photo'] ) || ! empty( $cb['message']['video'] ) || ! empty( $cb['message']['audio'] ) || ! empty( $cb['message']['document'] );
+            $result = $has_media
+                ? self::edit_caption( $chat, $message_id, $text, $keyboard )
+                : self::edit_text( $chat, $message_id, $text, $keyboard );
+            if ( ! self::telegram_ok( $result ) && ! is_wp_error( $result ) ) { self::send( $chat, $text, $keyboard ); }
             return;
         }
         if ( 'prompt:search' === $data ) {
@@ -1316,22 +1525,18 @@ class AhangBan_Telegram {
             self::send( $chat, '🎵 نام آهنگ یا خواننده را همین‌جا بنویسید؛ مثلاً: محسن یگانه — بی‌تاب', self::home_kb() );
             return;
         }
+        if ( 'prompt:artist' === $data ) {
+            self::answer_cb( $callback_id );
+            set_transient( 'ahangban_tg_flow_' . (int) $user_id, array( 'action' => 'await_artist' ), 10 * MINUTE_IN_SECONDS );
+            self::send( $chat, '🎤 نام خواننده را در پیام بعدی بنویسید؛ مثلاً: معین یا گوگوش', self::home_kb() );
+            return;
+        }
 
         if ( self::starts_with( $data, 'song:' ) ) {
             $song_id = substr( $data, 5 );
             if ( ! ctype_digit( $song_id ) || (int) $song_id <= 0 ) { self::answer_cb( $callback_id, 'شناسه نامعتبر است.' ); return; }
             self::answer_cb( $callback_id );
-            $song = AhangBan_Search::get_single( (int) $song_id );
-            if ( ! $song ) { self::send( $chat, '❌ آهنگ منتشرشده‌ای با این شناسه پیدا نشد.', null, null ); return; }
-            $caption = self::song_caption( $song );
-            $keyboard = self::song_kb( $song );
-            $photo = self::safe_media_url( $song['cover'] ?? '' );
-            if ( $photo ) {
-                $response = self::send_photo( $chat, $photo, $caption, $keyboard );
-                if ( ! self::telegram_ok( $response ) ) { self::send( $chat, $caption, $keyboard ); }
-            } else {
-                self::send( $chat, $caption, $keyboard );
-            }
+            self::handle_song_card( $chat, (int) $song_id );
             return;
         }
 

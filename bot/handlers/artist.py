@@ -10,6 +10,7 @@ from ..api_client import api, APIError
 from ..db import increment_stat
 from ..utils.formatters import artist_caption, song_list_item
 from ..utils.keyboards import artist_card, artists_list_pagination
+from .song import _send_card_photo
 
 log = logging.getLogger("ahangban.artist")
 
@@ -213,32 +214,53 @@ async def show_artist(update_or_query, context, identifier: str, page: int = 1, 
     # Merge
     all_buttons = keyboard + term_kb.inline_keyboard
 
-    cover = term.get("image")
+    markup = InlineKeyboardMarkup(all_buttons)
 
-    try:
-        if edit_mode and cq:
-            # If cover, send photo as new message (can't edit photo)
-            if cover and page == 1:
-                await cq.message.reply_photo(photo=cover, caption=caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-                # Also edit old to simple text to avoid duplicate
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-            else:
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
+    if edit_mode and cq:
+        # Keep a photo card in place when Telegram's 1024-character caption limit allows it.
+        if getattr(cq.message, "photo", None):
+            if len(caption) <= 1000:
+                try:
+                    await cq.edit_message_caption(caption=caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+                    return
+                except Exception as exc:
+                    if "message is not modified" in str(exc).lower():
+                        return
+                    log.warning("editing artist photo caption failed; switching to text card: %s", exc)
+            # Text pages have a larger limit; replace the photo rather than trying editMessageText on media.
+            try:
+                await cq.message.delete()
+            except Exception:
+                pass
+            try:
+                await cq.message.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+            except Exception as exc:
+                log.warning("sending paginated artist text card failed: %s", exc)
         else:
-            msg_target = update_or_query.message if hasattr(update_or_query, "message") else cq.message
-            if cover:
-                await msg_target.reply_photo(photo=cover, caption=caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
+            photo_status = await _send_card_photo(cq.message, term, caption, markup) if (term.get("image") or term.get("image_fallback")) else "missing"
+            if "sent" == photo_status:
+                try:
+                    await cq.message.delete()
+                except Exception:
+                    try:
+                        await cq.edit_message_text("✅ صفحهٔ کامل خواننده در پیام بعدی است.")
+                    except Exception:
+                        pass
+            elif "unknown" == photo_status:
+                pass  # Avoid a second send when Telegram's response timed out ambiguously.
             else:
-                await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-    except Exception as e:
-        log.warning("show artist failed: %s", e)
-        try:
-            if cq and edit_mode:
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-            else:
-                await update_or_query.message.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-        except Exception:
-            pass
+                try:
+                    await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+                except Exception as exc:
+                    log.warning("editing artist card failed: %s", exc)
+    else:
+        msg_target = update_or_query.message if hasattr(update_or_query, "message") else update_or_query
+        photo_status = await _send_card_photo(msg_target, term, caption, markup) if (term.get("image") or term.get("image_fallback")) else "missing"
+        if "missing" == photo_status or "rejected" == photo_status:
+            try:
+                await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+            except Exception as exc:
+                log.warning("sending text-only artist card failed: %s", exc)
 
     await increment_stat("artist_views")
 
@@ -250,10 +272,19 @@ async def artist_text_search(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = update.message.text.strip()
     try:
         data = await api.artists(q=text, page=1, per_page=PER_PAGE_ARTISTS)
+    except APIError as exc:
+        await update.message.reply_text(f"❌ جست‌وجوی خواننده انجام نشد: {exc.message}")
+        return
     except Exception:
+        log.exception("artist text search failed")
+        await update.message.reply_text("❌ ارتباط با سایت برقرار نشد؛ کمی بعد دوباره امتحان کنید.")
         return
     results = data.get("results") or []
     if not results:
+        await update.message.reply_text(
+            f"😕 خواننده‌ای با نام «{text[:100]}» پیدا نشد. از فهرست الفبایی هم می‌توانید کمک بگیرید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎤 فهرست خوانندگان", callback_data="artists:page:1")], [InlineKeyboardButton("🏠 خانه", callback_data="home")]]),
+        )
         return
     # Show as quick list
     keyboard = []

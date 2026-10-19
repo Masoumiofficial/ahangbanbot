@@ -16,7 +16,7 @@
 ```
 [کاربر تلگرام] ⇄ Telegram Bot API ⇄ [سرویس ربات Python] ⇄ HTTPS+Token ⇄ [افزونه ahangban-connector @ WP ] ⇄ WP DB (post/artist/postmeta/termmeta)
                                          ↕
-                                   SQLite محلی (کش، وضعیت گفتگو، علاقه‌مندی‌ها، rate-limit)
+                                   SQLite محلی (کش، وضعیت کاربر، تاریخچهٔ جست‌وجو، rate-limit و file_id)
 ```
 
 ### چرا هیبرید؟
@@ -60,7 +60,7 @@
 
 ```json
 {
-  "results": [{ "id": 123, "title": "...", "song": "...", "artist": "...", "type": "audio", "cover": "https://.../thumb2.jpg", "permalink": "https://ahangban.ir/.../", "qualities": { "128": "https://...", "320": "https://..." }, "artists": [{"term_id": 7, "name": "...", "slug": "..."}] }],
+  "results": [{ "id": 123, "title": "...", "song": "...", "artist": "...", "type": "audio", "cover": "https://.../large.jpg", "cover_fallback": "https://.../medium_large.jpg", "permalink": "https://ahangban.ir/.../", "qualities": { "128": "https://...", "320": "https://..." }, "artists": [{"term_id": 7, "name": "...", "slug": "..."}] }],
   "total": 42, "page": 1, "per_page": 5
 }
 ```

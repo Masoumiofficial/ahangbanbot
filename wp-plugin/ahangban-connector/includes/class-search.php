@@ -180,14 +180,22 @@ class AhangBan_Search {
             }
         }
 
-        // Cover
+        // Telegram cards need a real display-size image; the theme's `thumb2` is only 190x190.
+        // Prefer WordPress `large` (normally up to 1024px), then fall back to medium sizes.
         $cover = '';
+        $cover_fallback = '';
         if ( has_post_thumbnail( $id ) ) {
-            $cover = get_the_post_thumbnail_url( $id, 'thumb2' );
-            if ( ! $cover ) { $cover = get_the_post_thumbnail_url( $id, 'medium' ); }
+            $thumbnail_id = (int) get_post_thumbnail_id( $id );
+            if ( $thumbnail_id > 0 ) {
+                $cover = wp_get_attachment_image_url( $thumbnail_id, 'large' );
+                if ( ! $cover ) { $cover = wp_get_attachment_image_url( $thumbnail_id, 'full' ); }
+                $cover_fallback = wp_get_attachment_image_url( $thumbnail_id, 'medium_large' );
+                if ( ! $cover_fallback ) { $cover_fallback = wp_get_attachment_image_url( $thumbnail_id, 'medium' ); }
+                if ( $cover_fallback === $cover ) { $cover_fallback = ''; }
+            }
         }
         if ( ! $cover ) {
-            // Fallback to template default (not exposing local path)
+            // No featured image is better than a tiny or invented placeholder.
             $cover = '';
         }
 
@@ -221,6 +229,7 @@ class AhangBan_Search {
             'type'      => $musics_type,
             'type_key'  => self::classify_type( $musics_type ),
             'cover'     => $cover ? esc_url_raw( $cover ) : '',
+            'cover_fallback' => $cover_fallback ? esc_url_raw( $cover_fallback ) : '',
             'permalink' => $permalink ? esc_url_raw( $permalink ) : '',
             'qualities' => $qualities,
             'artists'   => $artists,
@@ -417,6 +426,33 @@ class AhangBan_Search {
         return $payload;
     }
 
+    /** Resolve an ACF term image to a large Telegram-friendly URL without changing the stored field. */
+    private static function artist_image_urls( $value ) {
+        $attachment_id = 0;
+        $url = '';
+        if ( is_array( $value ) ) {
+            $attachment_id = (int) ( $value['ID'] ?? $value['id'] ?? 0 );
+            $url = isset( $value['url'] ) ? (string) $value['url'] : '';
+        } elseif ( is_numeric( $value ) ) {
+            $attachment_id = (int) $value;
+        } elseif ( is_string( $value ) ) {
+            $url = trim( $value );
+        }
+
+        if ( $attachment_id > 0 ) {
+            $large = wp_get_attachment_image_url( $attachment_id, 'large' );
+            $fallback = wp_get_attachment_image_url( $attachment_id, 'medium_large' );
+            if ( ! $fallback ) { $fallback = wp_get_attachment_image_url( $attachment_id, 'medium' ); }
+            if ( ! $large ) { $large = wp_get_attachment_url( $attachment_id ); }
+            return array(
+                'image' => $large ? esc_url_raw( $large ) : '',
+                'image_fallback' => ( $fallback && $fallback !== $large ) ? esc_url_raw( $fallback ) : '',
+            );
+        }
+
+        return array( 'image' => $url ? esc_url_raw( $url ) : '', 'image_fallback' => '' );
+    }
+
     public static function get_artists( $params ) {
         $q = isset( $params['q'] ) ? trim( (string) $params['q'] ) : '';
         $letter = isset( $params['letter'] ) ? trim( (string) $params['letter'] ) : '';
@@ -461,18 +497,10 @@ class AhangBan_Search {
             $first = $first_chars ? $first_chars[0] : '#';
             $letter_key = isset( $index[ $first ] ) ? $first : '#';
 
-            // Image
-            $img = '';
-            if ( function_exists( 'get_field' ) ) {
-                $aimg = get_field( 'aimg2', $term );
-                if ( is_array( $aimg ) && ! empty( $aimg['url'] ) ) { $img = $aimg['url']; }
-                elseif ( is_numeric( $aimg ) ) { $img = wp_get_attachment_url( (int) $aimg ); }
-                elseif ( is_string( $aimg ) && '' !== $aimg ) { $img = $aimg; }
-            }
-            if ( '' === $img ) {
-                $img = get_term_meta( $term->term_id, 'aimg2', true );
-                if ( is_numeric( $img ) ) { $img = wp_get_attachment_url( (int) $img ); }
-            }
+            // The known source field is `aimg2`; resolve attachment IDs to a larger display size.
+            $artist_image = function_exists( 'get_field' ) ? get_field( 'aimg2', $term ) : '';
+            if ( empty( $artist_image ) ) { $artist_image = get_term_meta( $term->term_id, 'aimg2', true ); }
+            $artist_images = self::artist_image_urls( $artist_image );
 
             $link = get_term_link( $term );
             $link = is_wp_error( $link ) ? '' : $link;
@@ -483,7 +511,8 @@ class AhangBan_Search {
                 'slug' => $term->slug,
                 'link' => $link ? esc_url_raw( $link ) : '',
                 'count' => (int) $term->count,
-                'image' => $img ? esc_url_raw( $img ) : '',
+                'image' => $artist_images['image'],
+                'image_fallback' => $artist_images['image_fallback'],
                 'letter' => $letter_key,
                 'norm' => $norm,
                 'sort_key' => self::artist_sort_key( $term->name, $index ),
@@ -560,6 +589,35 @@ class AhangBan_Search {
         return $key;
     }
 
+    /** Count artist content types in SQL rather than loading every post and meta row into PHP. */
+    private static function artist_buckets( $term ) {
+        $cache_key = AhangBan_Cache::make_key( 'artist_buckets', array( 'term_id' => (int) $term->term_id ) );
+        $cached = AhangBan_Cache::get( $cache_key );
+        if ( false !== $cached ) { return $cached; }
+
+        global $wpdb;
+        $buckets = array( 'audio' => 0, 'video' => 0, 'album' => 0, 'other' => 0 );
+        $sql = $wpdb->prepare(
+            "SELECT COALESCE(NULLIF(pm.meta_value, ''), %s) AS raw_type, COUNT(DISTINCT p.ID) AS item_count
+             FROM {$wpdb->posts} p
+             INNER JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
+             LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = %s
+             WHERE p.post_type = %s AND p.post_status = %s AND tr.term_taxonomy_id = %d
+             GROUP BY raw_type",
+            'آهنگ', 'musics_type', 'post', 'publish', (int) $term->term_taxonomy_id
+        );
+        $rows = $wpdb->get_results( $sql, ARRAY_A );
+        if ( is_array( $rows ) ) {
+            foreach ( $rows as $row ) {
+                $key = self::classify_type( (string) ( $row['raw_type'] ?? '' ) );
+                if ( ! isset( $buckets[ $key ] ) ) { $key = 'other'; }
+                $buckets[ $key ] += (int) ( $row['item_count'] ?? 0 );
+            }
+        }
+        AhangBan_Cache::set( $cache_key, $buckets, 600 );
+        return $buckets;
+    }
+
     public static function get_artist_detail( $identifier, $page = 1, $per_page = 10, $sort = 'new' ) {
         $page = max( 1, (int) $page );
         $per_page = min( 20, max( 1, (int) $per_page ) );
@@ -587,19 +645,10 @@ class AhangBan_Search {
         $cached = AhangBan_Cache::get( $cache_key );
         if ( false !== $cached ) { return $cached; }
 
-        // Image & description
-        $img = '';
-        if ( function_exists( 'get_field' ) ) {
-            $aimg = get_field( 'aimg2', $term );
-            if ( is_array( $aimg ) && ! empty( $aimg['url'] ) ) { $img = $aimg['url']; }
-            elseif ( is_numeric( $aimg ) ) { $img = wp_get_attachment_url( (int) $aimg ); }
-            elseif ( is_string( $aimg ) && '' !== trim( $aimg ) ) { $img = trim( $aimg ); }
-        }
-        if ( '' === $img ) {
-            $meta_img = get_term_meta( $term->term_id, 'aimg2', true );
-            if ( is_numeric( $meta_img ) ) { $img = wp_get_attachment_url( (int) $meta_img ); }
-            elseif ( is_string( $meta_img ) && '' !== $meta_img ) { $img = $meta_img; }
-        }
+        // Image & description — use the verified ACF term field and preserve an optimized fallback.
+        $artist_image = function_exists( 'get_field' ) ? get_field( 'aimg2', $term ) : '';
+        if ( empty( $artist_image ) ) { $artist_image = get_term_meta( $term->term_id, 'aimg2', true ); }
+        $artist_images = self::artist_image_urls( $artist_image );
 
         $description = term_description( $term->term_id, self::get_taxonomy() );
         $link = get_term_link( $term );
@@ -651,25 +700,8 @@ class AhangBan_Search {
             }
         }
 
-        // Buckets counts (like taxonomy-artist.php)
-        $buckets = array( 'audio' => 0, 'video' => 0, 'album' => 0, 'other' => 0 );
-        // For buckets we need all posts count per type — do a lightweight query (ids only)
-        $all_q = new WP_Query( array(
-            'post_type' => 'post',
-            'post_status' => 'publish',
-            'posts_per_page' => -1,
-            'fields' => 'ids',
-            'no_found_rows' => true,
-            'tax_query' => array( array( 'taxonomy' => self::get_taxonomy(), 'field' => 'term_id', 'terms' => $term->term_id ) ),
-        ) );
-        if ( $all_q->posts ) {
-            update_postmeta_cache( $all_q->posts );
-            foreach ( $all_q->posts as $pid ) {
-                $raw = (string) get_post_meta( $pid, 'musics_type', true );
-                $key = self::classify_type( $raw );
-                if ( isset( $buckets[ $key ] ) ) { $buckets[ $key ]++; } else { $buckets['other']++; }
-            }
-        }
+        // Bucket counts are cached and aggregated in SQL; this avoids loading an artist's entire archive.
+        $buckets = self::artist_buckets( $term );
 
         $payload = array(
             'term' => array(
@@ -677,7 +709,8 @@ class AhangBan_Search {
                 'name' => $term->name,
                 'slug' => $term->slug,
                 'link' => $link ? esc_url_raw( $link ) : '',
-                'image' => $img ? esc_url_raw( $img ) : '',
+                'image' => $artist_images['image'],
+                'image_fallback' => $artist_images['image_fallback'],
                 'description' => $description ? wp_kses_post( $description ) : '',
                 'count' => (int) $term->count,
                 'socials' => $socials,

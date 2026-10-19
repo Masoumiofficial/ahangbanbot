@@ -12,6 +12,8 @@ class AhangBan_Settings {
     const OPTION_BOT_USERNAME = 'ahangban_bot_username';
     const OPTION_WEBHOOK_URL  = 'ahangban_webhook_url';
     const OPTION_MODE         = 'ahangban_bot_mode';
+    const OPTION_CHANNEL_TARGET = 'ahangban_channel_target';
+    const OPTION_CHANNEL_AUTO_POST = 'ahangban_channel_auto_post';
 
     public static function init() {}
 
@@ -64,6 +66,28 @@ class AhangBan_Settings {
             return ltrim( (string) AHANGBAN_BOT_USERNAME, '@' );
         }
         return ltrim( (string) get_option( self::OPTION_BOT_USERNAME, '' ), '@' );
+    }
+
+    public static function get_channel_target() {
+        return trim( (string) get_option( self::OPTION_CHANNEL_TARGET, '' ) );
+    }
+
+    public static function is_channel_auto_post_enabled() {
+        return '1' === (string) get_option( self::OPTION_CHANNEL_AUTO_POST, '0' );
+    }
+
+    public static function normalize_channel_target( $target ) {
+        $target = trim( (string) $target );
+        if ( '' === $target ) { return ''; }
+        if ( preg_match( '/^-100[0-9]{6,20}$/', $target ) ) { return $target; }
+        $username = '@' === substr( $target, 0, 1 ) ? substr( $target, 1 ) : $target;
+        return preg_match( '/^[A-Za-z0-9_]{5,32}$/', $username ) ? '@' . $username : '';
+    }
+
+    public static function validate_channel_target( $target ) {
+        $target = trim( (string) $target );
+        if ( '' === $target || '' !== self::normalize_channel_target( $target ) ) { return true; }
+        return new WP_Error( 'invalid_channel', 'کانال باید با @username یا شناسهٔ عددی منفی مثل -100… وارد شود.' );
     }
 
     public static function get_mode() {
@@ -140,6 +164,28 @@ class AhangBan_Settings {
                 $errors[] = 'حالت اجرا نامعتبر است.';
             } else {
                 $values[ self::OPTION_MODE ] = $mode;
+            }
+        }
+
+        if ( isset( $data['channel_target'] ) ) {
+            $channel_target = trim( (string) $data['channel_target'] );
+            $valid = self::validate_channel_target( $channel_target );
+            if ( is_wp_error( $valid ) ) {
+                $errors[] = $valid->get_error_message();
+            } else {
+                $values[ self::OPTION_CHANNEL_TARGET ] = self::normalize_channel_target( $channel_target );
+            }
+        }
+
+        if ( array_key_exists( 'channel_auto_post', $data ) ) {
+            $enabled = in_array( (string) $data['channel_auto_post'], array( '1', 'true', 'yes', 'on' ), true );
+            $channel_target = array_key_exists( 'channel_target', $values )
+                ? $values[ self::OPTION_CHANNEL_TARGET ]
+                : self::get_channel_target();
+            if ( $enabled && '' === $channel_target ) {
+                $errors[] = 'برای فعال‌کردن ارسال خودکار، ابتدا شناسه یا یوزرنیم کانال را وارد کنید.';
+            } else {
+                $values[ self::OPTION_CHANNEL_AUTO_POST ] = $enabled ? '1' : '0';
             }
         }
 

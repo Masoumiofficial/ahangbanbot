@@ -24,7 +24,10 @@ def main_inline(is_admin: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🆕 جدیدترین‌ها", callback_data="browse:latest:1"),
             InlineKeyboardButton("🔥 محبوب‌ترین‌ها", callback_data="browse:popular:1"),
         ],
-        [InlineKeyboardButton("🎤 همهٔ خوانندگان", callback_data="artists:page:1")],
+        [
+            InlineKeyboardButton("👤 جست‌وجوی خواننده", callback_data="prompt:artist"),
+            InlineKeyboardButton("🎤 همهٔ خوانندگان", callback_data="artists:page:1"),
+        ],
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
     ]
     if is_admin:

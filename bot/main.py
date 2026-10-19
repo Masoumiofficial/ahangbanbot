@@ -18,7 +18,7 @@ from telegram.ext import (
 
 from .config import BOT_TOKEN, LOG_LEVEL, validate, RATE_LIMIT_PER_MINUTE, is_admin
 from .db import init_db, is_blocked, check_rate_limit, upsert_user
-from .handlers.start import start_handler, help_handler, ping_handler, help_callback, home_callback, noop_callback, search_prompt_callback
+from .handlers.start import start_handler, help_handler, ping_handler, help_callback, home_callback, noop_callback, search_prompt_callback, artist_search_prompt_callback
 from .handlers.search import search_text_handler, search_command, search_pagination_callback
 from .handlers.song import song_callback, download_callback, lyrics_callback, related_callback, album_callback, song_command
 from .handlers.artist import artists_list_handler, artist_callback, artist_command
@@ -56,6 +56,15 @@ async def rate_limit_middleware(update: Update, context):
                 await update.effective_message.reply_text("⛔ دسترسی شما به ربات محدود شده است.")
                 context.user_data["blocked_notice_at"] = time.time()
         raise ApplicationHandlerStop
+
+    # The artist prompt is a one-shot, short-lived state; unrelated buttons/commands cancel it.
+    if update.callback_query:
+        if update.callback_query.data != "prompt:artist":
+            context.user_data.pop("search_mode", None)
+            context.user_data.pop("search_mode_expires_at", None)
+    elif update.effective_message and (update.effective_message.text or "").startswith("/"):
+        context.user_data.pop("search_mode", None)
+        context.user_data.pop("search_mode_expires_at", None)
 
     allowed = await check_rate_limit(user.id, RATE_LIMIT_PER_MINUTE)
     if not allowed:
@@ -131,6 +140,7 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(admin_broadcast_confirm_callback, pattern=r"^admin:broadcast_confirm$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^admin:broadcast_cancel$"))
     app.add_handler(CallbackQueryHandler(search_prompt_callback, pattern=r"^prompt:search$"))
+    app.add_handler(CallbackQueryHandler(artist_search_prompt_callback, pattern=r"^prompt:artist$"))
     app.add_handler(CallbackQueryHandler(song_callback, pattern=r"^song:\d+$"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern=r"^dl:\d+:.+$"))
     app.add_handler(CallbackQueryHandler(lyrics_callback, pattern=r"^lyrics:\d+$"))

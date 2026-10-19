@@ -66,6 +66,37 @@ class AhangBan_Admin {
                 foreach ( $errors as $e ) { add_settings_error( 'ahangban_connector', 'bot_err', $e, 'error' ); }
             }
 
+        } elseif ( 'save_channel' === $action ) {
+            $errors = AhangBan_Settings::save( array(
+                'channel_target' => isset( $_POST['channel_target'] ) ? wp_unslash( $_POST['channel_target'] ) : '',
+                'channel_auto_post' => isset( $_POST['channel_auto_post'] ) ? wp_unslash( $_POST['channel_auto_post'] ) : '0',
+            ) );
+            if ( empty( $errors ) ) {
+                add_settings_error( 'ahangban_connector', 'channel_saved', '✅ تنظیمات کانال ذخیره شد. برای ارسال واقعی، ربات باید در کانال دسترسی مدیر داشته باشد.', 'updated' );
+            } else {
+                foreach ( $errors as $error ) { add_settings_error( 'ahangban_connector', 'channel_err', $error, 'error' ); }
+            }
+
+        } elseif ( 'test_channel' === $action ) {
+            $token = AhangBan_Settings::get_bot_token();
+            $target = AhangBan_Settings::get_channel_target();
+            if ( '' === $token || '' === $target ) {
+                add_settings_error( 'ahangban_connector', 'channel_test_missing', 'ابتدا توکن ربات و شناسه یا یوزرنیم کانال را ذخیره کنید.', 'error' );
+            } else {
+                $res = self::telegram_api( $token, 'sendMessage', array(
+                    'chat_id' => $target,
+                    'text' => '✅ اتصال ربات آهنگ‌بان به این کانال برقرار است. پیام آزمایشیِ درخواستی از پیشخوان وردپرس بود.',
+                    'disable_web_page_preview' => true,
+                ) );
+                if ( is_wp_error( $res ) ) {
+                    add_settings_error( 'ahangban_connector', 'channel_test_err', 'خطای ارتباط با تلگرام: ' . esc_html( $res->get_error_message() ), 'error' );
+                } elseif ( ! empty( $res['ok'] ) ) {
+                    add_settings_error( 'ahangban_connector', 'channel_test_ok', '✅ پیام آزمایشی در کانال ارسال شد؛ دسترسی انتشار تأیید شد.', 'updated' );
+                } else {
+                    add_settings_error( 'ahangban_connector', 'channel_test_err', 'تلگرام پیام را نپذیرفت: ' . esc_html( $res['description'] ?? 'پاسخ نامشخص' ) . ' — ربات را به‌عنوان مدیر کانال اضافه کنید.', 'error' );
+                }
+            }
+
         } elseif ( 'regenerate_secret' === $action ) {
             update_option( AhangBan_Settings::OPTION_BOT_SECRET, bin2hex( random_bytes( 16 ) ), false );
             add_settings_error( 'ahangban_connector', 'secret_regen', '🔐 Secret جدید وب‌هوک ساخته شد. دوباره وب‌هوک را ست کنید.', 'updated' );
@@ -147,10 +178,12 @@ class AhangBan_Admin {
         $webhook_url = AhangBan_Settings::get_webhook_url();
         $is_configured = AhangBan_Settings::is_bot_configured();
         $maybe_const_token = defined('AHANGBAN_BOT_TOKEN') && AHANGBAN_BOT_TOKEN ? true : false;
+        $channel_target = AhangBan_Settings::get_channel_target();
+        $channel_auto_post = AhangBan_Settings::is_channel_auto_post_enabled();
         ?>
         <div class="wrap" dir="rtl" style="text-align:right">
             <h1>🔌 اتصال آهنگ‌بان — API ربات تلگرام <small style="color:#646970">v<?php echo esc_html(AHANGBAN_CONNECTOR_VERSION); ?></small></h1>
-            <p>این افزونه داده‌های منتشرشدهٔ سایت را از طریق REST امن در اختیار ربات تلگرام قرار می‌دهد. <strong>از v1.2.0 تنظیم توکن‌ها بدون SSH ممکن است؛ v1.3.0 ارسال فایل و پنل مدیریت ربات را هم اضافه می‌کند.</strong></p>
+            <p>این افزونه داده‌های منتشرشدهٔ سایت را از طریق REST امن در اختیار ربات تلگرام قرار می‌دهد. <strong>از v1.2.0 تنظیم توکن‌ها بدون SSH ممکن است؛ v1.3.0 ارسال فایل و پنل مدیریت را آورد و v1.4.0 کیفیت کاورها و اتصال اختیاری کانال را بهبود می‌دهد.</strong></p>
 
             <!-- 1. وضعیت سامانه -->
             <div style="background:#fff;border:1px solid #ccd0d4;border-radius:12px;padding:20px;margin:16px 0;max-width:920px">
@@ -216,6 +249,37 @@ class AhangBan_Admin {
                     </table>
                     <p><button type="submit" class="button button-primary">💾 ذخیره تنظیمات ربات</button> <span class="description">ذخیره بدون SSH — فقط همین صفحه.</span></p>
                 </form>
+            </div>
+
+            <!-- کانال -->
+            <div style="background:#fff;border:1px solid #ccd0d4;border-radius:12px;padding:20px;margin:16px 0;max-width:920px">
+                <h2>📣 اتصال کانال تلگرام</h2>
+                <p>با فعال‌کردن انتشار خودکار، آثار موسیقیِ تازه‌ای که در وردپرس منتشر شوند (نوع موسیقیِ شناخته‌شده یا متافیلد رسانهٔ قالب)، بعد از صف WP-Cron به کانال فرستاده می‌شوند؛ نوشته‌های عادی نادیده گرفته می‌شوند و داده و تصویر از همان اثر واقعی سایت گرفته می‌شود. قابلیت پیش‌فرض خاموش است.</p>
+                <p><strong>وضعیت:</strong> <?php echo $channel_target ? esc_html( $channel_target ) : 'کانال تنظیم نشده'; ?> — انتشار خودکار: <?php echo $channel_auto_post ? '✅ روشن' : 'خاموش'; ?></p>
+                <form method="post">
+                    <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
+                    <input type="hidden" name="ahangban_action" value="save_channel">
+                    <table class="form-table" role="presentation">
+                        <tr>
+                            <th scope="row"><label for="channel_target">شناسه یا یوزرنیم کانال</label></th>
+                            <td>
+                                <input type="text" id="channel_target" name="channel_target" value="<?php echo esc_attr( $channel_target ); ?>" dir="ltr" style="width:100%;max-width:520px" placeholder="@ahangban یا -1001234567890">
+                                <p class="description">کانال عمومی: <code>@username</code>؛ کانال خصوصی: شناسهٔ عددی منفی که با <code>-100</code> شروع می‌شود. ربات باید مدیر کانال و مجاز به ارسال پیام باشد.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">انتشار خودکار</th>
+                            <td><input type="hidden" name="channel_auto_post" value="0"><label><input type="checkbox" name="channel_auto_post" value="1" <?php checked( $channel_auto_post ); ?>> پس از انتشار هر آهنگ جدید در سایت، یک پست اطلاع‌رسانی در کانال بفرست</label></td>
+                        </tr>
+                    </table>
+                    <p><button type="submit" class="button button-primary">💾 ذخیره تنظیمات کانال</button></p>
+                </form>
+                <form method="post" style="display:inline-block">
+                    <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
+                    <input type="hidden" name="ahangban_action" value="test_channel">
+                    <button type="submit" class="button" <?php disabled( ! $is_configured || ! $channel_target ); ?>>✉️ ارسال پیام آزمایشی به کانال</button>
+                </form>
+                <p class="description">برای اتصال ابتدا ربات را از تنظیمات کانال به‌عنوان مدیر اضافه کنید. آزمون بالا واقعاً یک پیام آزمایشی منتشر می‌کند. پست‌های خودکار با WP-Cron پردازش می‌شوند؛ اگر Cron هاست خاموش باشد انتشار خودکار به تعویق می‌افتد.</p>
             </div>
 
             <!-- 3. وب‌هوک -->

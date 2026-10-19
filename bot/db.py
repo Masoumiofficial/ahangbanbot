@@ -1,5 +1,5 @@
 """
-SQLite محلی ربات: کاربران، علاقه‌مندی‌ها، تاریخچه، rate-limit، کش فایل تلگرام
+SQLite محلی ربات: کاربران، تاریخچه، rate-limit و کش file_id تلگرام
 """
 import aiosqlite
 import time
@@ -124,26 +124,25 @@ async def count_users(active_days: int = 7) -> dict:
 
 # --- Rate limit ---
 async def check_rate_limit(user_id: int, limit_per_min: int = 20) -> bool:
-    """
-    Returns True if allowed, False if rate-limited
-    """
+    """Atomically enforce a per-user sliding window across concurrent bot updates."""
     now = int(time.time())
     window = 60
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Serialize the read/modify/write so two simultaneous updates cannot both pass the limit.
+        await db.execute("BEGIN IMMEDIATE")
         async with db.execute("SELECT count, window_start FROM rate_limits WHERE user_id=?", (user_id,)) as cur:
             row = await cur.fetchone()
         if not row:
             await db.execute("INSERT INTO rate_limits (user_id, count, window_start) VALUES (?, 1, ?)", (user_id, now))
             await db.commit()
             return True
-        count = row["count"]
-        start = row["window_start"]
-        if now - start >= window:
+        if now - int(row["window_start"]) >= window:
             await db.execute("UPDATE rate_limits SET count=1, window_start=? WHERE user_id=?", (now, user_id))
             await db.commit()
             return True
-        if count >= limit_per_min:
+        if int(row["count"]) >= limit_per_min:
+            await db.rollback()
             return False
         await db.execute("UPDATE rate_limits SET count=count+1 WHERE user_id=?", (user_id,))
         await db.commit()

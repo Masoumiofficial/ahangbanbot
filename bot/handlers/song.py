@@ -111,6 +111,37 @@ def _file_id_from_message(message):
             return item
     return None
 
+
+async def _send_card_photo(message, item: dict, caption: str, keyboard):
+    """Send a large cover first, use the WordPress medium fallback only on a definite rejection."""
+    candidates = []
+    for value in (item.get("cover") or item.get("image"), item.get("cover_fallback") or item.get("image_fallback")):
+        url = str(value or "").strip()
+        if url and url not in candidates and await asyncio.to_thread(_is_public_https_url, url):
+            candidates.append(url)
+
+    if not candidates:
+        return "missing"
+    for url in candidates:
+        try:
+            await message.reply_photo(
+                photo=url,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+            return "sent"
+        except BadRequest as exc:
+            # BadRequest is a definitive rejection (e.g. large image exceeds Telegram's limit),
+            # so trying the lower-resolution WordPress variant cannot create a duplicate.
+            log.info("Telegram rejected cover variant; trying fallback: %s", exc)
+        except Exception as exc:
+            # Network failures are ambiguous: Telegram may have accepted the send before timeout.
+            log.warning("cover send has ambiguous outcome; suppressing duplicate fallback: %s", exc)
+            return "unknown"
+    return "rejected"
+
+
 async def song_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -158,46 +189,34 @@ async def _show_song(query_or_update, context, song_id: int, edit: bool = False)
     await increment_stat("song_views")
     caption = song_caption(song)
     keyboard = song_card(song)
-    cover = song.get("cover")
-
-    # Store last song for favorite
-    if cq:
-        context.user_data["last_song"] = song
-
-    # Try to send with photo if available
-    try:
-        if edit and cq:
-            # If we have a cover, we can't edit text to photo — send new message
-            if cover:
-                await cq.message.reply_photo(
-                    photo=cover,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                )
-                # Optionally delete loading message? Keep it
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-                # Actually delete the loading if we sent photo; better to just send photo and keep text
-                # For simplicity, send photo + delete old text not needed
-            else:
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-        else:
-            # Called from command / direct
-            msg_target = query_or_update.message if hasattr(query_or_update, "message") else query_or_update
-            if cover:
-                await msg_target.reply_photo(photo=cover, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-            else:
-                await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    except Exception as e:
-        log.warning("send song card failed: %s", e)
+    if cq and edit:
+        photo_status = await _send_card_photo(cq.message, song, caption, keyboard)
+        if "sent" == photo_status:
+            # Remove the old search/list message to avoid the previous duplicate text + photo card.
+            try:
+                await cq.message.delete()
+            except Exception:
+                try:
+                    await cq.edit_message_text("✅ کارت کامل اثر در پیام بعدی است.")
+                except Exception:
+                    pass
+            return
+        if "unknown" == photo_status:
+            return  # Never send a second card when Telegram's first response timed out ambiguously.
         try:
-            fallback = caption + "\n\n(تصویر بارگذاری نشد)"
-            if cq:
-                await cq.edit_message_text(fallback, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-            else:
-                await query_or_update.message.reply_text(fallback, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-        except Exception:
-            pass
+            await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        except Exception as exc:
+            log.warning("editing song card failed: %s", exc)
+        return
+
+    msg_target = query_or_update.message if hasattr(query_or_update, "message") else query_or_update
+    photo_status = await _send_card_photo(msg_target, song, caption, keyboard)
+    if "sent" == photo_status or "unknown" == photo_status:
+        return
+    try:
+        await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    except Exception as exc:
+        log.warning("sending text-only song card failed: %s", exc)
 
 async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:

@@ -5,6 +5,12 @@ class AhangBan_Cache {
     const PREFIX = 'ahangban_';
 
     public static function init() {
+        // Bump the cache namespace on plugin updates so changed payloads (e.g. high-res covers) appear immediately.
+        $build = (string) get_option( 'ahangban_connector_cache_build', '' );
+        if ( ! defined( 'AHANGBAN_CONNECTOR_VERSION' ) || $build !== AHANGBAN_CONNECTOR_VERSION ) {
+            self::bump_version();
+            if ( defined( 'AHANGBAN_CONNECTOR_VERSION' ) ) { update_option( 'ahangban_connector_cache_build', AHANGBAN_CONNECTOR_VERSION, false ); }
+        }
         // Invalidate on content changes
         add_action( 'save_post', array( __CLASS__, 'on_save_post' ), 10, 3 );
         add_action( 'deleted_post', array( __CLASS__, 'on_delete_post' ) );
