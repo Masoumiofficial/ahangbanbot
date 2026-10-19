@@ -1,0 +1,19 @@
+version: "3.8"
+services:
+  ahangbanbot:
+    build: .
+    container_name: ahangbanbot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ahangban-data:/data
+    environment:
+      AHANGBAN_DB_PATH: /data/ahangban.db
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  ahangban-data:
