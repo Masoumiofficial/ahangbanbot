@@ -58,9 +58,10 @@ class AhangBan_Admin {
                 <table class="widefat" style="max-width:800px">
                     <tr><th>نسخهٔ افزونه</th><td><?php echo esc_html( AHANGBAN_CONNECTOR_VERSION ); ?></td></tr>
                     <tr><th>وردپرس</th><td><?php echo esc_html( get_bloginfo( 'version' ) ); ?> — PHP <?php echo esc_html( PHP_VERSION ); ?></td></tr>
-                    <tr><th>تاکسونومی singer</th><td><?php echo taxonomy_exists( 'singer' ) ? '✅ فعال' : '❌ ثبت نشده'; ?></td></tr>
+                    <?php $ab_tax = AhangBan_Search::get_taxonomy(); $ab_tax_exists = taxonomy_exists( $ab_tax ); $ab_legacy = taxonomy_exists( 'singer' ) && $ab_tax !== 'singer'; ?>
+                    <tr><th>تاکسونومی فعال</th><td><?php echo $ab_tax_exists ? '✅ فعال — <code>'.esc_html($ab_tax).'</code>' : '❌ ثبت نشده'; ?><?php if ( $ab_legacy ) echo ' <span style=\"color:#d63638\">(قدیمی singer هنوز موجود است — مهاجرت توصیه می‌شود)</span>'; ?></td></tr>
                     <tr><th>تعداد آثار منتشرشده</th><td><?php echo esc_html( number_format_i18n( (int) wp_count_posts( 'post' )->publish ) ); ?></td></tr>
-                    <tr><th>تعداد خوانندگان</th><td><?php echo esc_html( taxonomy_exists( 'singer' ) ? number_format_i18n( (int) wp_count_terms( array( 'taxonomy' => 'singer', 'hide_empty' => false ) ) ) : '—' ); ?></td></tr>
+                    <tr><th>تعداد خوانندگان</th><td><?php echo esc_html( $ab_tax_exists ? number_format_i18n( (int) wp_count_terms( array( 'taxonomy' => $ab_tax, 'hide_empty' => false ) ) ) : '—' ); ?><?php if ( $ab_legacy ) echo ' <small>— singer: '.esc_html(number_format_i18n((int)wp_count_terms(array('taxonomy'=>'singer','hide_empty'=>false)))).'</small>'; ?></td></tr>
                     <tr><th>نسخهٔ کش</th><td><?php echo esc_html( (string) AhangBan_Cache::get_version() ); ?></td></tr>
                     <tr><th>آدرس پایه API</th><td><code dir="ltr"><?php echo esc_html( $base ); ?></code></td></tr>
                 </table>

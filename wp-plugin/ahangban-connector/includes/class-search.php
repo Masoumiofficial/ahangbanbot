@@ -4,6 +4,16 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
 class AhangBan_Search {
 
     /**
+     * نام تاکسونومی هنرمند — سازگار با مهاجرت singer→artist
+     * اگر هنوز 'artist' ثبت نشده ولی 'singer' قدیمی وجود دارد، به‌صورت خودکار fallback می‌کند.
+     */
+    public static function get_taxonomy() {
+        if ( taxonomy_exists( 'artist' ) ) { return 'artist'; }
+        if ( taxonomy_exists( 'singer' ) ) { return 'singer'; } // سازگاری موقت
+        return 'artist'; // پیش‌فرض جدید
+    }
+
+    /**
      * Normalize Persian text for search: ی/ي, ک/ك, ه/ة, ZWNJ/ZWJ, Tashkeel, extra spaces.
      */
     public static function normalize( $text ) {
@@ -183,7 +193,7 @@ class AhangBan_Search {
 
         // Artists terms
         $artists = array();
-        $terms = get_the_terms( $id, 'singer' );
+        $terms = get_the_terms( $id, self::get_taxonomy() );
         if ( $terms && ! is_wp_error( $terms ) ) {
             foreach ( $terms as $t ) {
                 $link = get_term_link( $t );
@@ -296,7 +306,7 @@ class AhangBan_Search {
 
         // Related (same artist, max 3)
         $related = array();
-        $terms = get_the_terms( $id, 'singer' );
+        $terms = get_the_terms( $id, self::get_taxonomy() );
         if ( $terms && ! is_wp_error( $terms ) ) {
             $term_ids = wp_list_pluck( $terms, 'term_id' );
             $q = new WP_Query( array(
@@ -304,7 +314,7 @@ class AhangBan_Search {
                 'post_status' => 'publish',
                 'posts_per_page' => 3,
                 'post__not_in' => array( $id ),
-                'tax_query' => array( array( 'taxonomy' => 'singer', 'field' => 'term_id', 'terms' => $term_ids ) ),
+                'tax_query' => array( array( 'taxonomy' => self::get_taxonomy(), 'field' => 'term_id', 'terms' => $term_ids ) ),
             ) );
             if ( $q->have_posts() ) {
                 update_postmeta_cache( wp_list_pluck( $q->posts, 'ID' ) );
@@ -420,12 +430,12 @@ class AhangBan_Search {
         $cached = AhangBan_Cache::get( $cache_key );
         if ( false !== $cached ) { return $cached; }
 
-        if ( ! taxonomy_exists( 'singer' ) ) {
-            return new WP_Error( 'no_taxonomy', 'تاکسونومی singer ثبت نشده است.', array( 'status' => 500 ) );
+        if ( ! taxonomy_exists( self::get_taxonomy() ) ) {
+            return new WP_Error( 'no_taxonomy', 'تاکسونومی artist ثبت نشده است.', array( 'status' => 500 ) );
         }
 
         $terms = get_terms( array(
-            'taxonomy' => 'singer',
+            'taxonomy' => self::get_taxonomy(),
             'hide_empty' => true,
             'orderby' => 'name',
             'order' => 'ASC',
@@ -555,18 +565,18 @@ class AhangBan_Search {
         $per_page = min( 20, max( 1, (int) $per_page ) );
         if ( ! in_array( $sort, array( 'new', 'old', 'title' ), true ) ) { $sort = 'new'; }
 
-        if ( ! taxonomy_exists( 'singer' ) ) {
-            return new WP_Error( 'no_taxonomy', 'تاکسونومی singer ثبت نشده است.', array( 'status' => 500 ) );
+        if ( ! taxonomy_exists( self::get_taxonomy() ) ) {
+            return new WP_Error( 'no_taxonomy', 'تاکسونومی artist ثبت نشده است.', array( 'status' => 500 ) );
         }
 
         // Find term by slug or id
         $term = null;
         if ( is_numeric( $identifier ) ) {
-            $term = get_term( (int) $identifier, 'singer' );
+            $term = get_term( (int) $identifier, self::get_taxonomy() );
         } else {
-            $term = get_term_by( 'slug', sanitize_title( $identifier ), 'singer' );
+            $term = get_term_by( 'slug', sanitize_title( $identifier ), self::get_taxonomy() );
             if ( ! $term ) {
-                $term = get_term_by( 'name', $identifier, 'singer' );
+                $term = get_term_by( 'name', $identifier, self::get_taxonomy() );
             }
         }
         if ( ! $term || is_wp_error( $term ) ) {
@@ -591,7 +601,7 @@ class AhangBan_Search {
             elseif ( is_string( $meta_img ) && '' !== $meta_img ) { $img = $meta_img; }
         }
 
-        $description = term_description( $term->term_id, 'singer' );
+        $description = term_description( $term->term_id, self::get_taxonomy() );
         $link = get_term_link( $term );
         $link = is_wp_error( $link ) ? '' : $link;
 
@@ -616,7 +626,7 @@ class AhangBan_Search {
             'paged' => $page,
             'orderby' => 'date',
             'order' => $order,
-            'tax_query' => array( array( 'taxonomy' => 'singer', 'field' => 'term_id', 'terms' => $term->term_id ) ),
+            'tax_query' => array( array( 'taxonomy' => self::get_taxonomy(), 'field' => 'term_id', 'terms' => $term->term_id ) ),
             'no_found_rows' => false,
         );
         $q = new WP_Query( $args );
@@ -641,7 +651,7 @@ class AhangBan_Search {
             }
         }
 
-        // Buckets counts (like taxonomy-singer.php)
+        // Buckets counts (like taxonomy-artist.php)
         $buckets = array( 'audio' => 0, 'video' => 0, 'album' => 0, 'other' => 0 );
         // For buckets we need all posts count per type — do a lightweight query (ids only)
         $all_q = new WP_Query( array(
@@ -650,7 +660,7 @@ class AhangBan_Search {
             'posts_per_page' => -1,
             'fields' => 'ids',
             'no_found_rows' => true,
-            'tax_query' => array( array( 'taxonomy' => 'singer', 'field' => 'term_id', 'terms' => $term->term_id ) ),
+            'tax_query' => array( array( 'taxonomy' => self::get_taxonomy(), 'field' => 'term_id', 'terms' => $term->term_id ) ),
         ) );
         if ( $all_q->posts ) {
             update_postmeta_cache( $all_q->posts );

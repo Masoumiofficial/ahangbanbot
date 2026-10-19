@@ -24,7 +24,7 @@ class AhangBan_Cache {
     }
 
     public static function on_term_change( $term_id, $tt_id, $taxonomy ) {
-        if ( 'singer' !== $taxonomy ) { return; }
+        if ( AhangBan_Search::get_taxonomy() !== $taxonomy && 'singer' !== $taxonomy ) { return; }
         self::bump_version();
     }
 

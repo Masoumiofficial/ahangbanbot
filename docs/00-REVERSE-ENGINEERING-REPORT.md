@@ -7,10 +7,10 @@
 ```
 javan-seda (artifact javanseda-v3.0.1-theme.zip — SHA هش در docs/CHANGES موجود است)
 ├── header.php / footer.php / home.php / single.php / page.php / search.php / tag.php / category.php
-├── artist-template.php        ← برگهٔ «همهٔ هنرمندان» (/singers/)
-├── taxonomy-singer.php        ← آرشیو هر خواننده (/singer/{slug})
+├── artist-template.php        ← برگهٔ «همهٔ هنرمندان» (/artists/)
+├── taxonomy-artist.php        ← آرشیو هر خواننده (/artist/{slug})
 ├── functions.php              ← رمزگذاری ionCube (قابل خواندن نیست — خطا می‌دهد)
-├── myfunctions.php            ← منطق تکمیلی خواننده + گزارش تشخیصی + ثبت جایگزین singer
+├── myfunctions.php            ← منطق تکمیلی خواننده + گزارش تشخیصی + ثبت جایگزین artist
 ├── style.css (v3.0.1) + css/icofont.min.css + fonts/vazir-*
 ├── js/scripts.js + owl.carousel
 ├── inc/
@@ -20,7 +20,7 @@ javan-seda (artifact javanseda-v3.0.1-theme.zip — SHA هش در docs/CHANGES �
 │   ├── new_posts.php / mostviews_posts.php / vip_slider.php / breadcrumbs.php
 │   ├── theme-options.php       ← تنظیمات OptionTree
 │   └── option-tree/            ← کتابخانهٔ OptionTree
-├── images/def-singer.webp, nomusics.jpg, logo.png, ...
+├── images/def-artist.webp, nomusics.jpg, logo.png, ...
 ├── searchwp-live-ajax-search/ ← جست‌وجوی زندهٔ قدیمی (data-swplive=true)
 └── docs/CHANGES_v3.0.1.md
 ```
@@ -43,20 +43,20 @@ javan-seda (artifact javanseda-v3.0.1-theme.zip — SHA هش در docs/CHANGES �
 
 | تاکسونومی | اسلاگ | سلسله‌مراتبی | کاربرد | rewrite |
 |---|---|---|---|---|
-| `singer` | `singer` | خیر (مانند برچسب) | خواننده — «منبع حقیقت» برای ربات | `/singer/{slug}` |
+| `artist` | `artist` | خیر (مانند برچسب) | خواننده — «منبع حقیقت» برای ربات | `/artist/{slug}` |
 | `category` | `category` | بله | دسته‌بندی سایت (برای باکس‌های صفحهٔ اصلی) | `/category/{slug}` |
 | `post_tag` | `tag` | خیر | نگهداشت قدیمی خواننده‌ها (حالت `reltag=on`) | `/tag/{slug}` |
 
-- رابطهٔ اصلی: **`wp_term_relationships` → `term_taxonomy_id` متعلق به `singer`** ↔ هر post.
-- یک اثر می‌تواند **چند خواننده** داشته باشد (چند ترم singer).
+- رابطهٔ اصلی: **`wp_term_relationships` → `term_taxonomy_id` متعلق به `artist`** ↔ هر post.
+- یک اثر می‌تواند **چند خواننده** داشته باشد (چند ترم artist).
 - ستون کناری و «سایر آهنگ‌های ...» دو منطق دارد:
-  ۱) اگر `reltag=off` (پیش‌فرض جدید): `tax_query` روی `singer`.
+  ۱) اگر `reltag=off` (پیش‌فرض جدید): `tax_query` روی `artist`.
   ۲) اگر `reltag=on`: `meta_query` با `LIKE` روی متای `artist` (قدیمی، کند).
-- کشف: اگر `singer` ثبت نشده باشد، `myfunctions.php` با ثابت `JAVANSEDA_SINGER_FIX=true` می‌تواند در اولویت ۹۹ آن را بسازد — ولی پیش‌فرض **خاموش** است.
+- کشف: اگر `artist` ثبت نشده باشد، `myfunctions.php` با ثابت `JAVANSEDA_ARTIST_FIX=true` می‌تواند در اولویت ۹۹ آن را بسازد — ولی پیش‌فرض **خاموش** است.
 
 ---
 
-## ۴. فیلدهای متا (قطعی — از single.php و taxonomy-singer.php استخراج شد)
+## ۴. فیلدهای متا (قطعی — از single.php و taxonomy-artist.php استخراج شد)
 
 ### ۴.۱ متای پست (`wp_postmeta` — توسط ACF ثبت شده‌اند)
 
@@ -64,7 +64,7 @@ javan-seda (artifact javanseda-v3.0.1-theme.zip — SHA هش در docs/CHANGES �
 |---|---|---|---|
 | `song` | text | `بی‌تاب` | نام آهنگ (عنوان نمایشی؛ اگر خالی باشد `post_title` جایگزین می‌شود) |
 | `artist` | text | `محسن یگانه` | نام خواننده (رشته؛ ممکن است چندنام با «،» جدا شده باشد) |
-| `artist_link` | url | `/singer/mohsen-yeganeh` | لینک دستی صفحهٔ خواننده (اختیاری — بر تاکسونومی اولویت دارد) |
+| `artist_link` | url | `/artist/mohsen-yeganeh` | لینک دستی صفحهٔ خواننده (اختیاری — بر تاکسونومی اولویت دارد) |
 | `musics_type` | select | `آهنگ` / `mp3` / `album` / `موزیک ویدیو` ... | نوع محتوا — نگاشت کامل در جدول بعدی |
 | `music128` | url | `https://dl.ahangban.ir/...128.mp3` | لینک دانلود کیفیت ۱۲۸ |
 | `music320` | url | `https://dl.ahangban.ir/...320.mp3` | لینک دانلود کیفیت ۳۲۰ |
@@ -86,7 +86,7 @@ javan-seda (artifact javanseda-v3.0.1-theme.zip — SHA هش در docs/CHANGES �
 | `albumlink128` | url | لینک آن ترک ۱۲۸ |
 | `albumlink320` | url | لینک آن ترک ۳۲۰ |
 
-### ۴.۳ نگاشت `musics_type` → دستهٔ منطقی (از `taxonomy-singer.php`)
+### ۴.۳ نگاشت `musics_type` → دستهٔ منطقی (از `taxonomy-artist.php`)
 
 ```php
 audio:  mp3, audio, ahang, آهنگ, آهنگ جدید, song
@@ -95,22 +95,22 @@ album:  album, آلبوم
 other:  هر مقدار دیگر (نمایش در «سایر موارد»)
 ```
 
-### ۴.۴ متای ترم `singer` (`wp_termmeta` + ACF on term)
+### ۴.۴ متای ترم `artist` (`wp_termmeta` + ACF on term)
 
 | meta_key | نوع | توضیح |
 |---|---|---|
 | `aimg2` | attachment ID / array / url | تصویر خواننده (اصلی‌ترین فیلد) |
-| `artist_en` / `en_name` / `singer_en` / ... | text | نام لاتین (اختیاری — در صورت نبود از اسلاگ ساخته می‌شود) |
-| `atelegram`, `ainstagram`, `atwitter`, `ayoutube` | url | شبکه‌های اجتماعی ترم (در taxonomy-singer.php استفاده می‌شود) |
+| `artist_en` / `en_name` / `artist_en` / ... | text | نام لاتین (اختیاری — در صورت نبود از اسلاگ ساخته می‌شود) |
+| `atelegram`, `ainstagram`, `atwitter`, `ayoutube` | url | شبکه‌های اجتماعی ترم (در taxonomy-artist.php استفاده می‌شود) |
 | `description` (term description) | html | بیوگرافی خواننده |
 
 ---
 
 ## ۵. URL و permalink
 
-- تک‌آهنگ: `https://ahangban.ir/{postname}/` (ساختار پیش‌فرض وردپرس `/%postname%/` حدس زده می‌شود؛ مقدار دقیق permalink_structure در گزارش `?ab_singer_diag=1` قابل مشاهده است)
-- آرشیو خواننده: `https://ahangban.ir/singer/{slug}/` + صفحه‌بندی `?paged=`
-- فهرست همهٔ خوانندگان: `https://ahangban.ir/singers/` (برگه با قالب `artist-template.php`)
+- تک‌آهنگ: `https://ahangban.ir/{postname}/` (ساختار پیش‌فرض وردپرس `/%postname%/` حدس زده می‌شود؛ مقدار دقیق permalink_structure در گزارش `?ab_artist_diag=1` قابل مشاهده است)
+- آرشیو خواننده: `https://ahangban.ir/artist/{slug}/` + صفحه‌بندی `?paged=`
+- فهرست همهٔ خوانندگان: `https://ahangban.ir/artists/` (برگه با قالب `artist-template.php`)
 - جست‌وجوی سایت: `https://ahangban.ir/?s={query}` + لایو AJAX قدیمی (`searchwp-live-ajax-search`)
 
 ---
@@ -175,7 +175,7 @@ other:  هر مقدار دیگر (نمایش در «سایر موارد»)
 2. **دامنهٔ واقعی فایل‌های دانلود** و آیا هات‌لینک/امضا/انقضا دارند یا خیر.
 3. **وضعیت REST API** — درخواست `wp-json` خالی برگشت (احتمالاً افزونهٔ امنیتی آن را بسته). باید از WP CLI یا مدیر پرسید.
 4. **نسخهٔ PHP و دسترسی SSH / cron / اجرای دائمی** روی هاست `etehadya` — در لاگ خطای `javan_seda_charts_add_shortcode` دیده شد (افزونهٔ ناقص).
-5. **تنظیمات permalink_structure دقیق** و اینکه `/singers/` واقعاً کدام برگه است (ID برگهٔ قالب `artist-template.php`).
+5. **تنظیمات permalink_structure دقیق** و اینکه `/artists/` واقعاً کدام برگه است (ID برگهٔ قالب `artist-template.php`).
 
 > پیشنهاد امن دریافت اطلاعات: مدیر وردپرس یک کاربر «read-only» با دسترسی REST سفارشی بسازد یا خروجی `wp db export --tables=wp_postmeta,wp_termmeta --no-data` + `wp option get permalink_structure` را بدهد — بدون رمز یا دادهٔ خصوصی.
 
@@ -183,6 +183,6 @@ other:  هر مقدار دیگر (نمایش در «سایر موارد»)
 
 ## جمع‌بندی یافته‌های قطعی
 
-- ربات باید **فقط به `post` + `singer` + متای ACF** متکی باشد — هر جدول موازی «منبع حقیقت دوگانه» است و ممنوع.
+- ربات باید **فقط به `post` + `artist` + متای ACF** متکی باشد — هر جدول موازی «منبع حقیقت دوگانه» است و ممنوع.
 - هیچ بازنویسی قالب لازم نیست؛ یک **افزونهٔ جانبی** امن‌ترین لایهٔ اتصال است.
 - ionCube یعنی `functions.php` قابل ویرایش نیست — پس افزونه باید هرگز به آن وابسته نباشد.

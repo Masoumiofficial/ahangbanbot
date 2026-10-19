@@ -20,8 +20,8 @@ async def test_search_empty_query_validation():
 @pytest.mark.asyncio
 async def test_health_mock():
     api = AhangBanAPI(base="https://example.com/wp-json/ahangban/v1", token="test")
-    mock_data = {"status": "ok", "wp": "6.6", "php": "8.2", "taxonomy_singer": True, "post_count": 1234}
+    mock_data = {"status": "ok", "wp": "6.6", "php": "8.2", "taxonomy_artist": True, "post_count": 1234}
     with patch.object(api, "_request", new=AsyncMock(return_value=mock_data)):
         data = await api.health()
         assert data["status"] == "ok"
-        assert data["taxonomy_singer"] is True
+        assert data["taxonomy_artist"] is True

@@ -23,7 +23,7 @@ cd wp-plugin && zip -r ahangban-connector.zip ahangban-connector
 
 ```
 https://ahangban.ir/wp-json/ahangban/v1/health
-→ {"status":"ok","wp":"...","php":"...","taxonomy_singer":true}
+→ {"status":"ok","wp":"...","php":"...","taxonomy_artist":true}
 ```
 
 5. تست احراز:
@@ -156,6 +156,6 @@ curl -H "Authorization: Bearer $TOKEN" https://ahangban.ir/wp-json/ahangban/v1/h
 |---|---|---|
 | ربات پاسخ نمی‌دهد | BOT_TOKEN اشتباه / polling مسدود | `journalctl` را ببینید؛ `/ping` از BotFather توکن را چک کنید |
 | `401/403` در لاگ | AHANGBAN_API_TOKEN اشتباه | توکن را از پیشخوان دوباره کپی کنید |
-| `singer غیرفعال` در `/health` | تاکسونومی ثبت نشده | مستند `SINGER-ARCHIVE-DIAGNOSIS.md` در قالب را بخوانید |
+| `artist غیرفعال` در `/health` | تاکسونومی ثبت نشده | مستند `ARTIST-ARCHIVE-DIAGNOSIS.md` در قالب را بخوانید |
 | ارسال فایل ناموفق | حجم >۵۰MB یا لینک expire | ربات خودکار لینک می‌دهد — طبیعی است |
 | Flood/429 | درخواست زیاد | صبر کنید؛ rate limit خودکار است |
