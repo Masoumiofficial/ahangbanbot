@@ -3,11 +3,10 @@
 این روش روی هاست اشتراکی اجرا می‌شود: WordPress webhook پیام‌های تلگرام را می‌گیرد؛ Python/VPS لازم نیست.
 
 ## ۱) نصب افزونه
-1. ZIP شاخهٔ به‌روزشده را دانلود کنید:
-   `https://github.com/Masoumiofficial/ahangbanbot/archive/refs/heads/arena/f2262129-ahangbanbot.zip`
-2. داخل ZIP به `wp-plugin/ahangban-connector` بروید و **محتویات همان پوشه** را به فایل `ahangban-connector.zip` تبدیل کنید.
-3. دایرکت‌ادمین → File Manager → `domains/ahangban.ir/public_html/wp-content/plugins` → Upload → Extract.
-4. وردپرس → افزونه‌ها → فعال‌سازی **AhangBan Connector**.
+1. فایل آمادهٔ نصب v1.4.0 را مستقیم دانلود کنید:
+   `https://github.com/Masoumiofficial/ahangbanbot/releases/download/v1.4.0/ahangban-connector-1.4.0.zip`
+2. وردپرس → افزونه‌ها → افزودن افزونه → بارگذاری افزونه؛ ZIP را انتخاب و نصب کنید. یا در دایرکت‌ادمین آن را در `domains/ahangban.ir/public_html/wp-content/plugins` بارگذاری و Extract کنید؛ فایل ZIP پوشهٔ افزونه را از قبل دارد.
+3. وردپرس → افزونه‌ها → فعال‌سازی/به‌روزرسانی **AhangBan Connector**.
 
 ## ۲) تنظیم توکن و ادمین در پیشخوان
 1. از `@BotFather` توکن بگیرید.
