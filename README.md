@@ -1,11 +1,11 @@
-# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.5.0
+# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.5.1
 
 > **برند:** آهنگ‌بان (AhangBan) — https://ahangban.ir  
 > **زبان:** فارسی · **جهت:** RTL · **منبع حقیقت:** دیتابیس وردپرس آهنگ‌بان  
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
-> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.5.0
-> - **[دانلود مستقیم ZIP آمادهٔ نصب افزونه v1.5.0](https://github.com/Masoumiofficial/ahangbanbot/raw/e564a73fc7f9e507befa930058368b37b5613832/releases/ahangban-connector-1.5.0.zip)** (`releases/ahangban-connector-1.5.0.zip`)
+> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.5.1
+> - **[دانلود مستقیم ZIP آمادهٔ نصب افزونه v1.5.1](https://github.com/Masoumiofficial/ahangbanbot/releases/download/v1.5.1/ahangban-connector-1.5.1.zip)** (`releases/ahangban-connector-1.5.1.zip`)
 > - پیش از ارتقا، اعتبارنامه‌ها را در محیط PHP هاست تنظیم کنید؛ v1.5.0 آن‌ها را از دیتابیس قدیمی پاک می‌کند و دیگر در پیشخوان ذخیره/نمایش نمی‌دهد.
 > - نصب و تنظیم webhook/کانال: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md). برای PHP-FPM باید هاست امکان تعریف Environment Variables را بدهد.
 
@@ -44,8 +44,8 @@
 - فهرست الفبایی همهٔ خوانندگان (مانند `/artists/` در سایت) + فیلتر حرف + جست‌وجوی زنده
 - جدیدترین‌ها و محبوب‌ترین‌های ماه (بر اساس `meta_key=views`)
 - ارسال فایل واقعی در تلگرام: دریافت مستقیم توسط تلگرام، سپس fallback امنِ دانلود/آپلود تا ۴۹ MiB؛ کش `file_id` صوت و پیوند معتبر در صورت شکست
-- پنل ادمین داخل ربات: `/admin`، آمار، سلامت، پاک‌سازی کش، مدیریت کاربران و پیام همگانیِ تأییدشده
-- اتصال اختیاری کانال: انتشار خودکار آثار موسیقی تازهٔ WordPress به کانال، با دکمهٔ deep-link به همان اثر در ربات؛ خاموش به‌صورت پیش‌فرض
+- پنل ادمین داخل ربات: `/admin`، آمار، سلامت، پاک‌سازی کش، مدیریت کاربران، پیام همگانی و انتشار دستی پست به کانال با پیش‌نمایش/تأیید
+- اتصال اختیاری کانال: انتشار دستی هر اثر منتشرشدهٔ قابل‌جست‌وجو + انتشار خودکار آثار تازهٔ WordPress؛ انتشار خودکار جداگانه و خاموش به‌صورت پیش‌فرض
 - حالت webhook داخلی PHP برای هاست اشتراکی؛ Python polling گزینهٔ VPS/Docker
 - ذخیرهٔ تاریخچهٔ جست‌وجو و کش رسانه در حالت Python
 
@@ -196,12 +196,12 @@ RATE_LIMIT_PER_MINUTE=20
 | `BOT_TOKEN` | توکن BotFather برای Python polling؛ در حالت WordPress webhook، همین مقدار با نام `AHANGBAN_BOT_TOKEN` به PHP داده می‌شود |
 | `AHANGBAN_API_BASE` | فقط HTTPS؛ URL پایهٔ افزونه (بدون `/` انتهایی) |
 | `AHANGBAN_API_TOKEN` | توکن تصادفیِ دقیقاً ۶۴رقمی hex؛ باید در PHP و این فایل خصوصی یکسان باشد |
-| `ADMIN_IDS` | شناسه‌های عددی ادمین با کاما (برای `/stats` و `/broadcast`) |
+| `ADMIN_IDS` | شناسه‌های عددی ادمین با کاما (برای `/admin`, `/stats`, `/broadcast` و انتشار دستی کانال) |
 | `AHANGBAN_DB_PATH` | مسیر SQLite ربات در حالت Python (پیش‌فرض `bot/ahangban.db`) |
 
 یوزرنیم ربات برای deep-link کانال را در فیلد غیرحساس «یوزرنیم ربات» در پیشخوان WordPress وارد کنید؛ Python متغیر `BOT_USERNAME` را مصرف نمی‌کند.
 
-برای WordPress webhook، متغیرهای `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN`, `AHANGBAN_BOT_SECRET` را جداگانه در محیط **PHP-FPM/هاست** تنظیم کنید. PHP فایل `.env` ربات را خودکار نمی‌خواند. در صورت استفاده از reverse proxy، فقط IP/CIDR پراکسی‌های واقعی را در `AHANGBAN_TRUSTED_PROXY_IPS` بگذارید؛ در غیر این صورت هدرهای IP ارسال‌شده توسط کلاینت اعتماد نمی‌شوند.
+برای WordPress webhook، متغیرهای `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN`, `AHANGBAN_BOT_SECRET` را جداگانه در محیط **PHP-FPM/هاست** تنظیم کنید. برای انتشار دستی کانال در حالت Python polling نیز `AHANGBAN_BOT_TOKEN` باید در محیط PHP تنظیم باشد؛ افزونه از همان کانال ذخیره‌شده در WordPress استفاده می‌کند. PHP فایل `.env` ربات را خودکار نمی‌خواند. در صورت استفاده از reverse proxy، فقط IP/CIDR پراکسی‌های واقعی را در `AHANGBAN_TRUSTED_PROXY_IPS` بگذارید؛ در غیر این صورت هدرهای IP ارسال‌شده توسط کلاینت اعتماد نمی‌شوند.
 
 برای یافتن `ADMIN_IDS`: در ربات `/start` بزنید، سپس به `@userinfobot` پیام دهید تا ID خود را ببینید.
 
@@ -247,6 +247,7 @@ journalctl -u ahangbanbot -f
 | `GET` | `/health` | سلامت (بدون احراز) | — |
 | `GET` | `/search?q=&type=&page=&per_page=` | جست‌وجو + رتبه‌بندی | `q` الزامی (≤۱۰۰ نویسه)، `type` ∈ `audio,video,album` |
 | `GET` | `/song/{id}` | کارت اثر + آثار مرتبط + ترک‌های آلبوم | `id` عددی |
+| `POST` | `/channel/publish` | انتشار دستی اثر انتخاب‌شده (فقط API سروربه‌سرور) | JSON: `post_id`؛ فقط اثر موسیقی منتشرشده |
 | `GET` | `/artists?q=&letter=&sort=&page=&per_page=` | فهرست خوانندگان | `sort` ∈ `name,songs` |
 | `GET` | `/artist/{slug_or_id}?page=&per_page=&sort=` | پروفایل خواننده + آثار | `sort` ∈ `new,old,title` |
 | `GET` | `/latest?page=&per_page=` | جدیدترین‌ها | — |
@@ -270,7 +271,8 @@ curl -H "Authorization: Bearer $AHANGBAN_API_TOKEN" \
 ## امنیت
 
 - ✅ اعتبارنامه‌های API، Bot و Webhook فقط از محیط PHP/`.env` خصوصی خوانده می‌شوند؛ هیچ fallback یا ذخیرهٔ جدیدی در `wp_options` نیست. گزینه‌های قدیمی در اولین اجرای v1.5.0 پاک می‌شوند.
-- ✅ API فقط آثار موسیقیِ منتشرشده و قابل‌تشخیص را برمی‌گرداند؛ نوشتهٔ معمولی یا محتوای خصوصی شامل نمی‌شود.
+- ✅ API فقط آثار موسیقیِ منتشرشده و قابل‌تشخیص را برمی‌گرداند؛ نوشتهٔ معمولی یا محتوای خصوصی شامل نمی‌شود. انتشار دستی کانال نیز فقط با اثر منتشرشده و از مسیر سروربه‌سرور Bearer-auth انجام می‌شود.
+- ✅ دکمهٔ انتشار فقط به ادمین Telegram نمایش داده می‌شود؛ پیش‌نمایش/تأیید لازم است و درخواست غیرقطعی به‌طور خودکار retry نمی‌شود.
 - ✅ هدر webhook اجباری، update تکراری deduplicate و rate limit با شمارندهٔ اتمی در دیتابیس موجود اعمال می‌شوند.
 - ✅ هدرهای IP فقط در صورت تطبیق `REMOTE_ADDR` با فهرست trusted proxy خوانده می‌شوند؛ CORS wildcard حذف شده است.
 - ✅ درخواست‌های Telegram روی HTTPS و بدون دنبال‌کردن redirect هستند؛ timeout/5xx مبهم باعث retry رسانه و ارسال تکراری نمی‌شود.
@@ -288,7 +290,7 @@ pip install -r bot/requirements-dev.txt
 pytest bot/tests/ -v
 ```
 
-تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پنل ادمین و اعتبارسنجی پیکربندی هستند. در 2026-10-20، **۳۹ تست Python موفق** شد؛ `compileall` و بررسی نحوی JavaScript هم موفق بودند. هر ۸ فایل PHP با parser سازگار با دستور زبان PHP 7.4 بررسی ایستا شدند؛ این جایگزین اجرای PHP/WordPress نیست. گزارش و محدودیت‌ها: [`docs/08-SECURITY-AUDIT-v1.5.0.md`](docs/08-SECURITY-AUDIT-v1.5.0.md). گزارش تست قدیمی v1.4.0 در [`docs/02-TEST-REPORT.md`](docs/02-TEST-REPORT.md) باقی است.
+تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پنل ادمین و انتشار دستی کانال هستند. در 2026-10-20، **۴۷ تست Python موفق** شد؛ `compileall` و بررسی نحوی JavaScript هم موفق بودند. هر ۸ فایل PHP با parser سازگار با دستور زبان PHP 7.4 بررسی ایستا شدند؛ این جایگزین اجرای PHP/WordPress نیست. گزارش و محدودیت‌ها: [`docs/08-SECURITY-AUDIT-v1.5.0.md`](docs/08-SECURITY-AUDIT-v1.5.0.md). گزارش تست قدیمی v1.4.0 در [`docs/02-TEST-REPORT.md`](docs/02-TEST-REPORT.md) باقی است.
 
 > اتصال واقعی به WordPress، Telegram، کانال، WP-Cron و ارسال رسانه روی هاست از این محیط تأیید نشده است؛ پذیرش زنده باید روی سایت با اعتبارنامه‌های واقعی انجام شود.
 

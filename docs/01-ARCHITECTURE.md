@@ -68,6 +68,9 @@
 ### آهنگ
 `GET /wp-json/ahangban/v1/song/{id}` → جزئیات + lyrics (اختیاری) + related (۳تا)
 
+### انتشار دستی در کانال
+`POST /wp-json/ahangban/v1/channel/publish` با بدنهٔ JSON `{"post_id":123}` و Bearer token معتبر. فقط پست موسیقی با وضعیت `publish` پذیرفته می‌شود؛ مقصد کانال و Bot Token از تنظیمات/محیط WordPress گرفته می‌شوند. این عملیات از انتشار خودکار مستقل است و در خطای مبهم Telegram retry نمی‌شود.
+
 ### خواننده
 `GET /wp-json/ahangban/v1/artist/{slug_or_id}?page=1&per_page=5&sort=new` → پروفایل + آثار صفحه‌بندی
 

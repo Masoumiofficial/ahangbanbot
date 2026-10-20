@@ -34,6 +34,15 @@ class AhangBan_API {
             'permission_callback' => array( __CLASS__, 'check_auth' ),
         ) );
 
+        register_rest_route( self::NS, '/channel/publish', array(
+            'methods' => 'POST',
+            'callback' => array( __CLASS__, 'channel_publish' ),
+            'permission_callback' => array( __CLASS__, 'check_auth' ),
+            'args' => array(
+                'post_id' => array( 'required' => true, 'type' => 'integer', 'minimum' => 1 ),
+            ),
+        ) );
+
         register_rest_route( self::NS, '/artists', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'artists' ),
@@ -111,6 +120,16 @@ class AhangBan_API {
             return new WP_Error( 'not_found', 'آهنگ یافت نشد یا منتشر نشده است.', array( 'status' => 404 ) );
         }
         return rest_ensure_response( $data );
+    }
+
+    /** Publish one explicitly selected, already-published music post to the configured channel. */
+    public static function channel_publish( WP_REST_Request $request ) {
+        $post_id = (int) $request->get_param( 'post_id' );
+        if ( $post_id <= 0 ) {
+            return new WP_Error( 'invalid_post_id', 'شناسهٔ پست نامعتبر است.', array( 'status' => 400 ) );
+        }
+        $result = AhangBan_Telegram::publish_channel_post( $post_id );
+        return is_wp_error( $result ) ? $result : rest_ensure_response( $result );
     }
 
     public static function artists( WP_REST_Request $request ) {

@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from ..api_client import api, APIError
+from ..config import is_admin
 from ..db import increment_stat, get_file_id, set_file_id
 from ..utils.formatters import song_caption, lyrics_text
 from ..utils.keyboards import song_card
@@ -188,7 +189,8 @@ async def _show_song(query_or_update, context, song_id: int, edit: bool = False)
 
     await increment_stat("song_views")
     caption = song_caption(song)
-    keyboard = song_card(song)
+    actor = cq.from_user if cq else getattr(query_or_update, "effective_user", None)
+    keyboard = song_card(song, is_admin=bool(actor and is_admin(actor.id)))
     if cq and edit:
         photo_status = await _send_card_photo(cq.message, song, caption, keyboard)
         if "sent" == photo_status:

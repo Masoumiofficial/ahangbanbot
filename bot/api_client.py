@@ -90,9 +90,18 @@ class AhangBanAPI:
             oldest = min(self._cache, key=lambda k: self._cache[k][0])
             del self._cache[oldest]
 
-    async def _request(self, method: str, path: str, params: dict = None, use_cache: bool = True) -> dict:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict = None,
+        use_cache: bool = True,
+        json_body: dict = None,
+        max_attempts: int = 3,
+    ) -> dict:
         url = f"{self.base}/{path.lstrip('/')}"
         params = params or {}
+        max_attempts = max(1, min(int(max_attempts), 3))
         cache_key = self._cache_key(path, params)
         if use_cache and method == "GET":
             cached = self._cache_get(cache_key)
@@ -101,12 +110,18 @@ class AhangBanAPI:
                 return cached
 
         client = self._get_client()
-        # Retry with backoff for transient errors
+        # Retry with backoff for transient errors. Non-idempotent calls can opt out.
         last_exc = None
         last_status = 0
-        for attempt in range(3):
+        for attempt in range(max_attempts):
             try:
-                resp = await client.request(method, url, params=params, headers=self._headers())
+                resp = await client.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    headers=self._headers(),
+                )
                 if resp.status_code == 429:
                     # Honor Retry-After, but keep the interaction responsive and bounded.
                     last_status = 429
@@ -115,8 +130,8 @@ class AhangBanAPI:
                     except (TypeError, ValueError):
                         wait = 2.0
                     wait = max(0.0, min(wait, 3.0))
-                    log.warning("API rate limited; retry %d/3 after %.1fs", attempt + 1, wait)
-                    if attempt < 2:
+                    log.warning("API rate limited; retry %d/%d after %.1fs", attempt + 1, max_attempts, wait)
+                    if attempt < max_attempts - 1:
                         await asyncio.sleep(wait)
                     continue
                 if 300 <= resp.status_code < 400:
@@ -142,19 +157,19 @@ class AhangBanAPI:
                     raise APIError(e.response.status_code, body) from e
                 last_exc = e
                 log.warning("transient API server response %s on attempt %d", e.response.status_code, attempt + 1)
-                if attempt < 2:
+                if attempt < max_attempts - 1:
                     await asyncio.sleep(0.5 * (attempt + 1))
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.TimeoutException) as e:
                 last_exc = e
                 last_status = 0
                 log.warning("API network error on attempt %d (%s)", attempt + 1, type(e).__name__)
-                if attempt < 2:
+                if attempt < max_attempts - 1:
                     await asyncio.sleep(0.5 * (attempt + 1))
             except ValueError as e:
                 last_exc = e
                 last_status = 502
                 log.warning("API returned invalid JSON for %s", path)
-                if attempt < 2:
+                if attempt < max_attempts - 1:
                     await asyncio.sleep(0.5 * (attempt + 1))
         if last_status == 429:
             raise APIError(429, "سایت در حال حاضر درخواست‌های زیادی دریافت می‌کند؛ چند لحظهٔ دیگر دوباره تلاش کنید.") from last_exc
@@ -191,6 +206,23 @@ class AhangBanAPI:
 
     async def cache_clear(self) -> dict:
         return await self._request("POST", "cache/clear", use_cache=False)
+
+    async def publish_channel_post(self, post_id: int) -> dict:
+        """Ask WordPress to publish one selected post using its configured channel and bot token.
+
+        This is intentionally a single attempt: Telegram may accept the send while the response
+        is lost, so retrying the request could publish the same post twice.
+        """
+        post_id = int(post_id)
+        if post_id <= 0:
+            raise ValueError("شناسهٔ پست باید عددی مثبت باشد.")
+        return await self._request(
+            "POST",
+            "channel/publish",
+            use_cache=False,
+            json_body={"post_id": post_id},
+            max_attempts=1,
+        )
 
     def invalidate(self, pattern: str = ""):
         if not pattern:

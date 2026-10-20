@@ -8,7 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from ..api_client import api
+from ..api_client import api, APIError
 from ..config import is_admin
 from ..db import DB_PATH, count_users, get_stats, set_blocked
 
@@ -32,6 +32,7 @@ def _admin_markup() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📊 آمار ربات", callback_data="admin:stats"), InlineKeyboardButton("🩺 سلامت سایت", callback_data="admin:health")],
         [InlineKeyboardButton("🧹 پاک‌سازی کش", callback_data="admin:cache_confirm")],
         [InlineKeyboardButton("👥 مدیریت کاربران", callback_data="admin:users"), InlineKeyboardButton("📢 پیام همگانی", callback_data="admin:broadcast_help")],
+        [InlineKeyboardButton("📣 انتشار پست در کانال", callback_data="admin:channel_publish")],
         [InlineKeyboardButton("🏠 خانه", callback_data="home")],
     ])
 
@@ -49,10 +50,178 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     text = (
         "🛠 <b>پنل مدیریت آهنگ‌بان</b>\n\n"
-        "از گزینه‌ها برای دیدن آمار، بررسی اتصال، پاک‌سازی کش و مدیریت کاربران استفاده کنید.\n"
+        "از گزینه‌ها برای دیدن آمار، بررسی اتصال، پاک‌سازی کش، مدیریت کاربران و انتشار دستی در کانال استفاده کنید.\n"
         "برای مسدود/آزاد کردن شناسهٔ عددی: <code>/block ID</code> یا <code>/unblock ID</code>."
     )
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=_admin_markup())
+    await _edit_admin_callback_message(query, text, _admin_markup())
+
+
+def _channel_publish_markup(post_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ تأیید و انتشار", callback_data=f"admin:channel_publish_confirm:{post_id}"),
+            InlineKeyboardButton("لغو", callback_data=f"admin:channel_publish_cancel:{post_id}"),
+        ],
+        [InlineKeyboardButton("🛠 پنل مدیریت", callback_data="admin:menu")],
+    ])
+
+
+def _channel_publish_preview(song: dict) -> str:
+    post_id = int(song.get("id") or 0)
+    title = html.escape(str(song.get("song") or song.get("title") or f"اثر #{post_id}")[:180])
+    artist = html.escape(str(song.get("artist") or "")[:140])
+    permalink = str(song.get("permalink") or "").strip()
+    lines = ["📣 <b>پیش‌نمایش انتشار در کانال</b>", "", f"🎵 <b>{title}</b>"]
+    if artist:
+        lines.append(f"👤 {artist}")
+    if permalink.startswith(("https://", "http://")):
+        lines.append(f"🔗 {html.escape(permalink, quote=True)}")
+    lines.extend([
+        "",
+        f"شناسهٔ پست: <code>{post_id}</code>",
+        "این ارسال به کانال تنظیم‌شده در WordPress می‌رود و به روشن‌بودن انتشار خودکار وابسته نیست.",
+    ])
+    return "\n".join(lines)
+
+
+async def _edit_admin_callback_message(query, text: str, reply_markup=None):
+    message = query.message
+    has_media = bool(message and any(getattr(message, kind, None) for kind in ("photo", "video", "audio", "document")))
+    if has_media:
+        await query.edit_message_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+    else:
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
+
+async def admin_channel_publish_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized_callback(update):
+        await query.answer("⛔ دسترسی ادمین لازم است.", show_alert=True)
+        return
+    await query.answer()
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 جست‌وجوی اثر", callback_data="prompt:search")],
+        [
+            InlineKeyboardButton("🆕 جدیدترین‌ها", callback_data="browse:latest:1"),
+            InlineKeyboardButton("🔥 محبوب‌ها", callback_data="browse:popular:1"),
+        ],
+        [InlineKeyboardButton("🎤 فهرست خوانندگان", callback_data="artists:page:1")],
+        [InlineKeyboardButton("↩ بازگشت به مدیریت", callback_data="admin:menu")],
+    ])
+    await _edit_admin_callback_message(
+        query,
+        "📣 <b>انتشار دستی در کانال</b>\n\n"
+        "یک اثر را جست‌وجو یا از جدیدترین‌ها/محبوب‌ها انتخاب کنید، کارت آن را باز کنید و «انتشار در کانال» را بزنید. "
+        "پیش از ارسال، تأیید جداگانه می‌گیرید. فقط آثار منتشرشدهٔ موجود در فهرست موسیقی ربات قابل انتخاب‌اند.",
+        markup,
+    )
+
+
+async def admin_channel_publish_prepare_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized_callback(update):
+        await query.answer("⛔ دسترسی ادمین لازم است.", show_alert=True)
+        return
+    try:
+        post_id = int(query.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        await query.answer("شناسهٔ پست نامعتبر است.", show_alert=True)
+        return
+    if post_id <= 0:
+        await query.answer("شناسهٔ پست نامعتبر است.", show_alert=True)
+        return
+
+    await query.answer("در حال آماده‌کردن پیش‌نمایش…")
+    try:
+        song = await api.song(post_id)
+    except APIError as exc:
+        await _edit_admin_callback_message(
+            query,
+            "❌ اثر برای پیش‌نمایش در دسترس نیست: " + html.escape(exc.message[:240]),
+            _admin_markup(),
+        )
+        return
+    except Exception as exc:
+        log.exception("failed loading post %s for manual channel publish", post_id)
+        await _edit_admin_callback_message(
+            query,
+            "❌ ارتباط با سایت برقرار نشد؛ دوباره کارت اثر را باز کنید.",
+            _admin_markup(),
+        )
+        return
+
+    context.user_data["channel_publish_pending"] = {"post_id": post_id, "created_at": time.time()}
+    await _edit_admin_callback_message(
+        query,
+        _channel_publish_preview(song),
+        _channel_publish_markup(post_id),
+    )
+
+
+async def admin_channel_publish_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized_callback(update):
+        await query.answer("⛔ دسترسی ادمین لازم است.", show_alert=True)
+        return
+    try:
+        post_id = int(query.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        await query.answer("درخواست لغو نامعتبر است.", show_alert=True)
+        return
+    pending = context.user_data.get("channel_publish_pending") or {}
+    if int(pending.get("post_id") or 0) != post_id:
+        await query.answer("این پیش‌نمایش منقضی شده است.", show_alert=True)
+        return
+    context.user_data.pop("channel_publish_pending", None)
+    await query.answer("انتشار لغو شد.")
+    await _edit_admin_callback_message(query, "✅ انتشار لغو شد.", _admin_markup())
+
+
+async def admin_channel_publish_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not _authorized_callback(update):
+        await query.answer("⛔ دسترسی ادمین لازم است.", show_alert=True)
+        return
+    try:
+        post_id = int(query.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        await query.answer("درخواست انتشار نامعتبر است.", show_alert=True)
+        return
+
+    pending = context.user_data.get("channel_publish_pending") or {}
+    created_at = float(pending.get("created_at") or 0)
+    if (
+        int(pending.get("post_id") or 0) != post_id
+        or created_at <= 0
+        or time.time() - created_at > 600
+    ):
+        context.user_data.pop("channel_publish_pending", None)
+        await query.answer("پیش‌نمایش منقضی شده است؛ دوباره از کارت اثر شروع کنید.", show_alert=True)
+        return
+
+    # Consume the confirmation before the network request so a double click cannot trigger a second send.
+    context.user_data.pop("channel_publish_pending", None)
+    await query.answer("در حال انتشار…")
+    try:
+        result = await api.publish_channel_post(post_id)
+        if result.get("status") != "sent":
+            raise APIError(502, "پاسخ سایت وضعیت انتشار را تأیید نکرد.")
+        message_id = int(result.get("message_id") or 0)
+        message = f"✅ پست <code>{post_id}</code> در کانال منتشر شد."
+        if message_id > 0:
+            message += f"\nشناسهٔ پیام کانال: <code>{message_id}</code>"
+    except APIError as exc:
+        if exc.status == 0 or exc.status >= 500:
+            message = (
+                "⚠️ نتیجهٔ ارسال قطعی نیست؛ کانال را بررسی کنید و برای جلوگیری از پیام تکراری فعلاً دوباره تأیید نکنید.\n"
+                + html.escape(exc.message[:220])
+            )
+        else:
+            message = "❌ انتشار انجام نشد: " + html.escape(exc.message[:260])
+    except Exception as exc:
+        log.exception("manual channel publish failed for post %s", post_id)
+        message = "⚠️ نتیجهٔ ارسال قطعی نیست؛ کانال را بررسی کنید و فعلاً دوباره ارسال نکنید."
+    await _edit_admin_callback_message(query, message, _admin_markup())
 
 
 @_admin_only
@@ -82,7 +251,7 @@ async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🎤 بازدید خواننده: {int(stats['artist_views_total']):,}\n\n"
         f"{health_line}\n🕐 {time.strftime('%Y-%m-%d %H:%M:%S')}"
     )
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=_admin_markup())
+    await _edit_admin_callback_message(query, text, _admin_markup())
 
 
 async def _send_stats(reply, context: ContextTypes.DEFAULT_TYPE):
@@ -126,7 +295,7 @@ async def admin_health_callback(update: Update, context: ContextTypes.DEFAULT_TY
         text = "✅ سلامت سایت:\n<pre>" + html.escape(str(health)) + "</pre>"
     except Exception as exc:
         text = "❌ خطا در Health: " + html.escape(str(exc)[:300])
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=_admin_markup())
+    await _edit_admin_callback_message(query, text, _admin_markup())
 
 
 @_admin_only
@@ -149,7 +318,7 @@ async def admin_cache_confirm_callback(update: Update, context: ContextTypes.DEF
         InlineKeyboardButton("✅ تأیید پاک‌سازی", callback_data="admin:cache_clear"),
         InlineKeyboardButton("لغو", callback_data="admin:menu"),
     ]])
-    await query.edit_message_text("🧹 کش نتایج آهنگ‌بان پاک شود؟ داده‌های اصلی وردپرس تغییر نمی‌کنند.", reply_markup=markup)
+    await _edit_admin_callback_message(query, "🧹 کش نتایج آهنگ‌بان پاک شود؟ داده‌های اصلی وردپرس تغییر نمی‌کنند.", markup)
 
 
 async def admin_cache_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,9 +330,13 @@ async def admin_cache_clear_callback(update: Update, context: ContextTypes.DEFAU
     try:
         await api.cache_clear()
         api.invalidate()
-        await query.edit_message_text("✅ کش افزونه و ربات پاک شد.", reply_markup=_admin_markup())
+        await _edit_admin_callback_message(query, "✅ کش افزونه و ربات پاک شد.", _admin_markup())
     except Exception as exc:
-        await query.edit_message_text("❌ خطا در پاک‌سازی: " + html.escape(str(exc)[:240]), parse_mode=ParseMode.HTML, reply_markup=_admin_markup())
+        await _edit_admin_callback_message(
+            query,
+            "❌ خطا در پاک‌سازی: " + html.escape(str(exc)[:240]),
+            _admin_markup(),
+        )
 
 
 async def admin_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -178,7 +351,7 @@ async def admin_users_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         "رفع مسدودی: <code>/unblock 123456789</code>\n\n"
         "شناسه باید عددی باشد. کاربران مسدودشده از ربات و پیام‌های همگانی محروم می‌شوند."
     )
-    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=_admin_markup())
+    await _edit_admin_callback_message(query, text, _admin_markup())
 
 
 async def admin_broadcast_help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,11 +360,11 @@ async def admin_broadcast_help_callback(update: Update, context: ContextTypes.DE
         await query.answer("⛔ دسترسی ادمین لازم است.", show_alert=True)
         return
     await query.answer()
-    await query.edit_message_text(
+    await _edit_admin_callback_message(
+        query,
         "📢 برای ساخت پیش‌نمایش بفرستید:\n<code>/broadcast متن پیام</code>\n\n"
         "ارسال عمومی فقط پس از تأیید دکمه انجام می‌شود و به کاربران مسدودشده فرستاده نمی‌شود.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=_admin_markup(),
+        _admin_markup(),
     )
 
 

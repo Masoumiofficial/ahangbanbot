@@ -61,7 +61,7 @@ def pagination(prefix: str, page: int, total_pages: int, extra: str = "") -> Inl
     buttons.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
     return InlineKeyboardMarkup(buttons)
 
-def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
+def song_card(song: dict, show_qualities: bool = True, is_admin: bool = False) -> InlineKeyboardMarkup:
     sid = song.get("id")
     rows = []
     # Qualities
@@ -100,6 +100,10 @@ def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
     # Related
     if song.get("related"):
         rows.append([InlineKeyboardButton("🎧 آثار مرتبط", callback_data=f"related:{sid}")])
+
+    # Admin-only manual channel publishing; WordPress checks the post is already public.
+    if is_admin and str(sid or "").isdigit() and int(sid) > 0:
+        rows.append([InlineKeyboardButton("📣 انتشار در کانال", callback_data=f"admin:channel_publish_prepare:{int(sid)}")])
 
     # Permalink + Share
     if song.get("permalink"):

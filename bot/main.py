@@ -28,7 +28,9 @@ from .handlers.admin import (
     broadcast_handler, broadcast_confirm_handler, admin_menu_callback, admin_stats_callback,
     admin_health_callback, admin_cache_confirm_callback, admin_cache_clear_callback,
     admin_users_callback, admin_broadcast_help_callback, admin_broadcast_confirm_callback,
-    admin_broadcast_cancel_callback,
+    admin_broadcast_cancel_callback, admin_channel_publish_menu_callback,
+    admin_channel_publish_prepare_callback, admin_channel_publish_confirm_callback,
+    admin_channel_publish_cancel_callback,
 )
 
 logging.basicConfig(
@@ -139,6 +141,10 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(admin_broadcast_help_callback, pattern=r"^admin:broadcast_help$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_confirm_callback, pattern=r"^admin:broadcast_confirm$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^admin:broadcast_cancel$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_menu_callback, pattern=r"^admin:channel_publish$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_prepare_callback, pattern=r"^admin:channel_publish_prepare:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_confirm_callback, pattern=r"^admin:channel_publish_confirm:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_cancel_callback, pattern=r"^admin:channel_publish_cancel:\d+$"))
     app.add_handler(CallbackQueryHandler(search_prompt_callback, pattern=r"^prompt:search$"))
     app.add_handler(CallbackQueryHandler(artist_search_prompt_callback, pattern=r"^prompt:artist$"))
     app.add_handler(CallbackQueryHandler(song_callback, pattern=r"^song:\d+$"))
