@@ -5,7 +5,7 @@
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
 > ### 📥 دانلود نسخهٔ فعلی — افزونه v1.5.1
-> - **[دانلود مستقیم ZIP آمادهٔ نصب افزونه v1.5.1](https://github.com/Masoumiofficial/ahangbanbot/releases/download/v1.5.1/ahangban-connector-1.5.1.zip)** (`releases/ahangban-connector-1.5.1.zip`)
+> - **[دانلود مستقیم ZIP آمادهٔ نصب افزونه v1.5.1](https://github.com/Masoumiofficial/ahangbanbot/raw/arena/f2262129-ahangbanbot/releases/ahangban-connector-1.5.1.zip)** (`releases/ahangban-connector-1.5.1.zip`)
 > - پیش از ارتقا، اعتبارنامه‌ها را در محیط PHP هاست تنظیم کنید؛ v1.5.0 آن‌ها را از دیتابیس قدیمی پاک می‌کند و دیگر در پیشخوان ذخیره/نمایش نمی‌دهد.
 > - نصب و تنظیم webhook/کانال: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md). برای PHP-FPM باید هاست امکان تعریف Environment Variables را بدهد.
 
