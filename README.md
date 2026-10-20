@@ -5,7 +5,7 @@
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
 > ### 📥 دانلود نسخهٔ فعلی — افزونه v1.4.0
-> - **دانلود مستقیم ZIP آمادهٔ نصب افزونه:** https://github.com/Masoumiofficial/ahangbanbot/raw/refs/heads/arena/f2262129-ahangbanbot/releases/ahangban-connector-1.4.0.zip
+> - **دانلود مستقیم ZIP آمادهٔ نصب افزونه:** https://github.com/Masoumiofficial/ahangbanbot/raw/97f0dc4203cd6b7db1770f6bf56bceb082257982/releases/ahangban-connector-1.4.0.zip
 > - از پیشخوان WordPress → افزونه‌ها → افزودن افزونه → بارگذاری افزونه، همین ZIP را انتخاب و نصب کنید.
 > - **دایرکت‌ادمین/بدون SSH:** توکن را در پیشخوان ذخیره کنید، وب‌هوک را ست کنید؛ فایل‌های صوتی در صورت امکان مستقیم upload می‌شوند و در غیر این صورت پیوند واقعی می‌آید.
 > - جزئیات نصب و پنل ادمین: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md).
