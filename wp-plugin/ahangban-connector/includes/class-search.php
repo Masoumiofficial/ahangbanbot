@@ -20,10 +20,134 @@ class AhangBan_Search {
         $text = (string) $text;
         $text = str_replace( array( "\xE2\x80\x8C", "\xE2\x80\x8D" ), ' ', $text ); // ZWNJ, ZWJ
         $text = str_replace( array( 'ي', 'ك', 'ة', 'ۀ', 'ؤ', 'أ', 'إ', 'آ', 'ٱ', 'ئ', 'ى' ), array( 'ی', 'ک', 'ه', 'ه', 'و', 'ا', 'ا', 'ا', 'ا', 'ی', 'ی' ), $text );
-        // Remove tashkeel + kashida
+        // Remove tashkeel + kashida. Invalid UTF-8 is treated as empty rather than passed to SQL.
         $text = preg_replace( '/[\x{064B}-\x{0652}\x{0640}\x{0670}]/u', '', $text );
+        if ( null === $text ) { return ''; }
         $text = preg_replace( '/\s+/u', ' ', $text );
-        return trim( $text );
+        return null === $text ? '' : trim( $text );
+    }
+
+    /** UTF-8 helpers with safe fallbacks for hosts that do not enable mbstring. */
+    public static function text_length( $text ) {
+        $text = (string) $text;
+        if ( function_exists( 'mb_strlen' ) ) { return mb_strlen( $text, 'UTF-8' ); }
+        $characters = preg_split( '//u', $text, -1, PREG_SPLIT_NO_EMPTY );
+        return is_array( $characters ) ? count( $characters ) : strlen( $text );
+    }
+
+    private static function text_substr( $text, $start, $length ) {
+        $text = (string) $text;
+        if ( function_exists( 'mb_substr' ) ) { return mb_substr( $text, (int) $start, (int) $length, 'UTF-8' ); }
+        $characters = preg_split( '//u', $text, -1, PREG_SPLIT_NO_EMPTY );
+        return is_array( $characters ) ? implode( '', array_slice( $characters, (int) $start, (int) $length ) ) : substr( $text, (int) $start, (int) $length );
+    }
+
+    private static function text_lower( $text ) {
+        return function_exists( 'mb_strtolower' ) ? mb_strtolower( (string) $text, 'UTF-8' ) : strtolower( (string) $text );
+    }
+
+    private static function text_position( $haystack, $needle ) {
+        return function_exists( 'mb_strpos' )
+            ? mb_strpos( (string) $haystack, (string) $needle, 0, 'UTF-8' )
+            : strpos( (string) $haystack, (string) $needle );
+    }
+
+    /** Add the same verified-music constraint to all public music queries. */
+    private static function query_music_posts( $args ) {
+        $args['ahangban_music_only'] = true;
+        add_filter( 'posts_where', array( __CLASS__, 'filter_music_posts_where' ), 10, 2 );
+        $title_sort = ! empty( $args['ahangban_sort_title'] );
+        if ( $title_sort ) { add_filter( 'posts_clauses', array( __CLASS__, 'filter_artist_title_clauses' ), 10, 2 ); }
+        try {
+            return new WP_Query( $args );
+        } finally {
+            remove_filter( 'posts_where', array( __CLASS__, 'filter_music_posts_where' ), 10 );
+            if ( $title_sort ) { remove_filter( 'posts_clauses', array( __CLASS__, 'filter_artist_title_clauses' ), 10 ); }
+        }
+    }
+
+    public static function filter_artist_title_clauses( $clauses, $wp_query ) {
+        if ( ! $wp_query->get( 'ahangban_sort_title' ) ) { return $clauses; }
+        global $wpdb;
+        $clauses['join'] .= " LEFT JOIN (
+            SELECT ahangban_song_meta.post_id, ahangban_song_meta.meta_value
+            FROM {$wpdb->postmeta} AS ahangban_song_meta
+            INNER JOIN (
+                SELECT post_id, MIN(meta_id) AS first_meta_id
+                FROM {$wpdb->postmeta}
+                WHERE meta_key = 'song'
+                GROUP BY post_id
+            ) AS ahangban_first_song ON ahangban_song_meta.meta_id = ahangban_first_song.first_meta_id
+        ) AS ahangban_song_title ON {$wpdb->posts}.ID = ahangban_song_title.post_id";
+        $title = "COALESCE(NULLIF(ahangban_song_title.meta_value, ''), {$wpdb->posts}.post_title)";
+        $case = 'CASE';
+        foreach ( self::artist_alphabet_index() as $character => $position ) {
+            $case .= $wpdb->prepare( " WHEN LEFT({$title}, 1) = %s THEN %d", $character, (int) $position );
+        }
+        $case .= ' ELSE 99 END';
+        $clauses['orderby'] = $case . " ASC, {$title} ASC, {$wpdb->posts}.ID ASC";
+        return $clauses;
+    }
+
+    public static function filter_music_posts_where( $where, $wp_query ) {
+        if ( ! $wp_query->get( 'ahangban_music_only' ) ) { return $where; }
+
+        global $wpdb;
+        $type_values = array_values( array_unique( array_merge(
+            self::type_filter_values( 'audio' ),
+            self::type_filter_values( 'video' ),
+            self::type_filter_values( 'album' )
+        ) ) );
+        $media_keys = array( 'music128', 'music320', 'album128', 'album320', 'video480', 'video720', 'video1080' );
+        $type_placeholders = implode( ',', array_fill( 0, count( $type_values ), '%s' ) );
+        $media_placeholders = implode( ',', array_fill( 0, count( $media_keys ), '%s' ) );
+        $sql = " AND (
+            EXISTS (
+                SELECT 1 FROM {$wpdb->postmeta} AS ahangban_music_type
+                WHERE ahangban_music_type.post_id = {$wpdb->posts}.ID
+                  AND ahangban_music_type.meta_key = %s
+                  AND ahangban_music_type.meta_value IN ({$type_placeholders})
+            )
+            OR EXISTS (
+                SELECT 1 FROM {$wpdb->postmeta} AS ahangban_music_media
+                WHERE ahangban_music_media.post_id = {$wpdb->posts}.ID
+                  AND ahangban_music_media.meta_key IN ({$media_placeholders})
+                  AND ahangban_music_media.meta_value <> ''
+            )
+        )";
+        $values = array_merge( array( 'musics_type' ), $type_values, $media_keys );
+        array_unshift( $values, $sql );
+        $where .= call_user_func_array( array( $wpdb, 'prepare' ), $values );
+
+        $requested_type = sanitize_key( (string) $wp_query->get( 'ahangban_type_filter' ) );
+        if ( in_array( $requested_type, array( 'audio', 'video', 'album' ), true ) ) {
+            $filter_values = self::type_filter_values( $requested_type );
+            $filter_keys = array(
+                'audio' => array( 'music128', 'music320' ),
+                'video' => array( 'video480', 'video720', 'video1080' ),
+                'album' => array( 'album128', 'album320' ),
+            )[ $requested_type ];
+            $filter_type_placeholders = implode( ',', array_fill( 0, count( $filter_values ), '%s' ) );
+            $filter_media_placeholders = implode( ',', array_fill( 0, count( $filter_keys ), '%s' ) );
+            $filter_sql = " AND (
+                EXISTS (
+                    SELECT 1 FROM {$wpdb->postmeta} AS ahangban_filtered_type
+                    WHERE ahangban_filtered_type.post_id = {$wpdb->posts}.ID
+                      AND ahangban_filtered_type.meta_key = %s
+                      AND ahangban_filtered_type.meta_value IN ({$filter_type_placeholders})
+                )
+                OR EXISTS (
+                    SELECT 1 FROM {$wpdb->postmeta} AS ahangban_filtered_media
+                    WHERE ahangban_filtered_media.post_id = {$wpdb->posts}.ID
+                      AND ahangban_filtered_media.meta_key IN ({$filter_media_placeholders})
+                      AND ahangban_filtered_media.meta_value <> ''
+                )
+            )";
+            $filter_values = array_merge( array( 'musics_type' ), $filter_values, $filter_keys );
+            array_unshift( $filter_values, $filter_sql );
+            $where .= call_user_func_array( array( $wpdb, 'prepare' ), $filter_values );
+        }
+        return $where;
     }
 
     /**
@@ -31,14 +155,16 @@ class AhangBan_Search {
      */
     public static function query_posts( $q, $type = '', $page = 1, $per_page = 5 ) {
         $q = trim( (string) $q );
-        if ( mb_strlen( $q ) > 100 ) { $q = mb_substr( $q, 0, 100 ); }
+        if ( self::text_length( $q ) > 100 ) { $q = self::text_substr( $q, 0, 100 ); }
         $norm = self::normalize( $q );
+        $page = max( 1, min( 1000, (int) $page ) );
+        $per_page = min( 20, max( 1, (int) $per_page ) );
         if ( '' === $norm ) {
             return array( 'results' => array(), 'total' => 0, 'page' => $page, 'per_page' => $per_page );
         }
 
-        $page = max( 1, (int) $page );
-        $per_page = min( 20, max( 1, (int) $per_page ) );
+        $type = sanitize_key( (string) $type );
+        if ( ! in_array( $type, array( '', 'audio', 'video', 'album' ), true ) ) { $type = ''; }
         $offset = ( $page - 1 ) * $per_page;
 
         // Use cache
@@ -53,41 +179,29 @@ class AhangBan_Search {
         // To avoid slow LIKE on post_content, we limit to title + meta.
 
         $args = array(
-            'post_type'      => 'post',
-            'post_status'    => 'publish',
-            'posts_per_page' => $per_page,
-            'offset'         => $offset,
-            'orderby'        => 'date',
-            'order'          => 'DESC',
-            'no_found_rows'  => false,
-            'suppress_filters' => false,
-            's'              => $norm,
+            'post_type'             => 'post',
+            'post_status'           => 'publish',
+            'posts_per_page'        => $per_page,
+            'offset'                => $offset,
+            'orderby'               => 'date',
+            'order'                 => 'DESC',
+            'no_found_rows'         => false,
+            'suppress_filters'      => false,
+            's'                     => $norm,
+            'ahangban_type_filter'  => $type,
         );
-
-        // If type filter provided, add meta_query for musics_type
-        if ( '' !== $type ) {
-            $type_map = self::type_filter_values( $type );
-            if ( ! empty( $type_map ) ) {
-                $args['meta_query'] = array(
-                    array(
-                        'key'     => 'musics_type',
-                        'value'   => $type_map,
-                        'compare' => 'IN',
-                    ),
-                );
-            }
-        }
 
         // Improve search: add filter to search in meta song/artist as well
         add_filter( 'posts_search', array( __CLASS__, 'filter_posts_search' ), 10, 2 );
-        // Store norm for filter
+        // Store norm for the narrowly-scoped search filter.
         global $ahangban_search_norm;
         $ahangban_search_norm = $norm;
-
-        $query = new WP_Query( $args );
-
-        remove_filter( 'posts_search', array( __CLASS__, 'filter_posts_search' ), 10 );
-        $ahangban_search_norm = null;
+        try {
+            $query = self::query_music_posts( $args );
+        } finally {
+            remove_filter( 'posts_search', array( __CLASS__, 'filter_posts_search' ), 10 );
+            $ahangban_search_norm = null;
+        }
 
         $total = (int) $query->found_posts;
         $results = array();
@@ -138,14 +252,13 @@ class AhangBan_Search {
         $norm = $ahangban_search_norm;
         $like = '%' . $wpdb->esc_like( $norm ) . '%';
 
-        // Extend search to include meta song/artist
-        // We'll inject OR conditions for postmeta
-        // Keep original search but add meta joins
-        // Instead of modifying JOIN here, we use a subquery via posts_where
-        // Simpler: add WHERE clause that checks meta values
-        $search = " AND ( {$wpdb->posts}.post_title LIKE %s OR {$wpdb->posts}.ID IN (SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key IN ('song','artist') AND meta_value LIKE %s) OR {$wpdb->posts}.post_content LIKE %s ) ";
-        $search = $wpdb->prepare( $search, $like, $like, $like );
-        return $search;
+        // Search indexed title/song/artist fields only. Searching post_content forces a full scan
+        // and is not needed for the bot's song/artist lookup.
+        $search = " AND ( {$wpdb->posts}.post_title LIKE %s OR {$wpdb->posts}.ID IN (
+            SELECT post_id FROM {$wpdb->postmeta}
+            WHERE meta_key IN ('song','artist') AND meta_value LIKE %s
+        ) ) ";
+        return $wpdb->prepare( $search, $like, $like );
     }
 
     public static function type_filter_values( $type ) {
@@ -250,20 +363,34 @@ class AhangBan_Search {
         return isset( $map[ $key ] ) ? $map[ $key ] : ( isset( $map[ (string) $raw ] ) ? $map[ (string) $raw ] : 'other' );
     }
 
+    /** Match the same conservative definition used for channel announcements. */
+    public static function is_music_record( $post ) {
+        if ( is_numeric( $post ) ) { $post = get_post( (int) $post ); }
+        if ( ! is_object( $post ) || 'post' !== $post->post_type || (int) $post->ID <= 0 ) { return false; }
+
+        $raw_type = trim( (string) get_post_meta( (int) $post->ID, 'musics_type', true ) );
+        if ( '' !== $raw_type && in_array( self::classify_type( $raw_type ), array( 'audio', 'video', 'album' ), true ) ) { return true; }
+        foreach ( array( 'music128', 'music320', 'album128', 'album320', 'video480', 'video720', 'video1080' ) as $meta_key ) {
+            $value = get_post_meta( (int) $post->ID, $meta_key, true );
+            if ( is_scalar( $value ) && '' !== trim( (string) $value ) ) { return true; }
+        }
+        return false;
+    }
+
     public static function rank_results( array $results, $norm ) {
-        $norm_lc = mb_strtolower( $norm, 'UTF-8' );
+        $norm_lc = self::text_lower( $norm );
         foreach ( $results as &$r ) {
             $score = 0;
-            $song_n = mb_strtolower( self::normalize( $r['song'] ), 'UTF-8' );
-            $artist_n = mb_strtolower( self::normalize( $r['artist'] ), 'UTF-8' );
-            $title_n = mb_strtolower( self::normalize( $r['title'] ), 'UTF-8' );
+            $song_n = self::text_lower( self::normalize( $r['song'] ) );
+            $artist_n = self::text_lower( self::normalize( $r['artist'] ) );
+            $title_n = self::text_lower( self::normalize( $r['title'] ) );
 
             if ( $song_n === $norm_lc || $artist_n === $norm_lc ) { $score += 100; }
-            elseif ( mb_strpos( $song_n, $norm_lc, 0, 'UTF-8' ) === 0 ) { $score += 80; }
-            elseif ( mb_strpos( $artist_n, $norm_lc, 0, 'UTF-8' ) === 0 ) { $score += 75; }
-            elseif ( false !== mb_strpos( $song_n, $norm_lc, 0, 'UTF-8' ) ) { $score += 60; }
-            elseif ( false !== mb_strpos( $artist_n, $norm_lc, 0, 'UTF-8' ) ) { $score += 55; }
-            elseif ( false !== mb_strpos( $title_n, $norm_lc, 0, 'UTF-8' ) ) { $score += 40; }
+            elseif ( 0 === self::text_position( $song_n, $norm_lc ) ) { $score += 80; }
+            elseif ( 0 === self::text_position( $artist_n, $norm_lc ) ) { $score += 75; }
+            elseif ( false !== self::text_position( $song_n, $norm_lc ) ) { $score += 60; }
+            elseif ( false !== self::text_position( $artist_n, $norm_lc ) ) { $score += 55; }
+            elseif ( false !== self::text_position( $title_n, $norm_lc ) ) { $score += 40; }
 
             // Prefer audio over other when no type filter
             if ( 'audio' === $r['type_key'] ) { $score += 5; }
@@ -295,8 +422,12 @@ class AhangBan_Search {
     public static function get_single( $id ) {
         $id = (int) $id;
         if ( $id <= 0 ) { return null; }
+        $cache_key = AhangBan_Cache::make_key( 'song', array( 'id' => $id ) );
+        $cached = AhangBan_Cache::get( $cache_key );
+        if ( false !== $cached ) { return $cached; }
+
         $post = get_post( $id );
-        if ( ! $post || 'post' !== $post->post_type || 'publish' !== $post->post_status ) {
+        if ( ! $post || 'post' !== $post->post_type || 'publish' !== $post->post_status || ! self::is_music_record( $post ) ) {
             return null;
         }
         update_postmeta_cache( array( $id ) );
@@ -318,12 +449,13 @@ class AhangBan_Search {
         $terms = get_the_terms( $id, self::get_taxonomy() );
         if ( $terms && ! is_wp_error( $terms ) ) {
             $term_ids = wp_list_pluck( $terms, 'term_id' );
-            $q = new WP_Query( array(
+            $q = self::query_music_posts( array(
                 'post_type' => 'post',
                 'post_status' => 'publish',
                 'posts_per_page' => 3,
                 'post__not_in' => array( $id ),
                 'tax_query' => array( array( 'taxonomy' => self::get_taxonomy(), 'field' => 'term_id', 'terms' => $term_ids ) ),
+                'no_found_rows' => true,
             ) );
             if ( $q->have_posts() ) {
                 update_postmeta_cache( wp_list_pluck( $q->posts, 'ID' ) );
@@ -348,17 +480,18 @@ class AhangBan_Search {
         }
         $data['album_tracks'] = $album_tracks;
 
+        AhangBan_Cache::set( $cache_key, $data, 300 );
         return $data;
     }
 
     public static function get_latest( $page = 1, $per_page = 5 ) {
-        $page = max( 1, (int) $page );
+        $page = max( 1, min( 1000, (int) $page ) );
         $per_page = min( 20, max( 1, (int) $per_page ) );
         $cache_key = AhangBan_Cache::make_key( 'latest', array( 'page' => $page, 'per_page' => $per_page ) );
         $cached = AhangBan_Cache::get( $cache_key );
         if ( false !== $cached ) { return $cached; }
 
-        $q = new WP_Query( array(
+        $q = self::query_music_posts( array(
             'post_type' => 'post',
             'post_status' => 'publish',
             'posts_per_page' => $per_page,
@@ -366,6 +499,7 @@ class AhangBan_Search {
             'orderby' => 'date',
             'order' => 'DESC',
             'no_found_rows' => false,
+            'ignore_sticky_posts' => true,
         ) );
         $total = (int) $q->found_posts;
         $results = array();
@@ -382,13 +516,13 @@ class AhangBan_Search {
     }
 
     public static function get_popular( $page = 1, $per_page = 5 ) {
-        $page = max( 1, (int) $page );
+        $page = max( 1, min( 1000, (int) $page ) );
         $per_page = min( 20, max( 1, (int) $per_page ) );
         $cache_key = AhangBan_Cache::make_key( 'popular', array( 'page' => $page, 'per_page' => $per_page ) );
         $cached = AhangBan_Cache::get( $cache_key );
         if ( false !== $cached ) { return $cached; }
 
-        $q = new WP_Query( array(
+        $q = self::query_music_posts( array(
             'post_type' => 'post',
             'post_status' => 'publish',
             'posts_per_page' => $per_page,
@@ -398,10 +532,11 @@ class AhangBan_Search {
             'order' => 'DESC',
             'date_query' => array( array( 'column' => 'post_date_gmt', 'after' => '1 month ago' ) ),
             'no_found_rows' => false,
+            'ignore_sticky_posts' => true,
         ) );
-        // Fallback if not enough results in last month
-        if ( ! $q->have_posts() ) {
-            $q = new WP_Query( array(
+        // Fall back to all-time popularity only when the whole monthly result set is empty.
+        if ( 0 === (int) $q->found_posts ) {
+            $q = self::query_music_posts( array(
                 'post_type' => 'post',
                 'post_status' => 'publish',
                 'posts_per_page' => $per_page,
@@ -410,6 +545,7 @@ class AhangBan_Search {
                 'orderby' => 'meta_value_num',
                 'order' => 'DESC',
                 'no_found_rows' => false,
+                'ignore_sticky_posts' => true,
             ) );
         }
         $total = (int) $q->found_posts;
@@ -453,19 +589,18 @@ class AhangBan_Search {
         return array( 'image' => $url ? esc_url_raw( $url ) : '', 'image_fallback' => '' );
     }
 
-    public static function get_artists( $params ) {
-        $q = isset( $params['q'] ) ? trim( (string) $params['q'] ) : '';
-        $letter = isset( $params['letter'] ) ? trim( (string) $params['letter'] ) : '';
-        $sort = isset( $params['sort'] ) ? sanitize_key( $params['sort'] ) : 'name';
-        $page = max( 1, (int) ( $params['page'] ?? 1 ) );
-        $per_page = min( 50, max( 1, (int) ( $params['per_page'] ?? 20 ) ) );
+    private static function artist_alphabet_index() {
+        $characters = preg_split( '//u', 'ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی', -1, PREG_SPLIT_NO_EMPTY );
+        $index = array();
+        foreach ( is_array( $characters ) ? $characters : array() as $position => $character ) { $index[ $character ] = $position; }
+        return $index;
+    }
 
-        if ( ! in_array( $sort, array( 'name', 'songs' ), true ) ) { $sort = 'name'; }
-
-        $cache_key = AhangBan_Cache::make_key( 'artists', array( 'q' => $q, 'letter' => $letter, 'sort' => $sort, 'page' => $page, 'per_page' => $per_page ) );
+    /** Cache only the small searchable term index; resolve image fields for the requested page only. */
+    private static function get_artist_index() {
+        $cache_key = AhangBan_Cache::make_key( 'artist_index', array() );
         $cached = AhangBan_Cache::get( $cache_key );
         if ( false !== $cached ) { return $cached; }
-
         if ( ! taxonomy_exists( self::get_taxonomy() ) ) {
             return new WP_Error( 'no_taxonomy', 'تاکسونومی artist ثبت نشده است.', array( 'status' => 500 ) );
         }
@@ -479,91 +614,93 @@ class AhangBan_Search {
         ) );
         if ( is_wp_error( $terms ) ) { return $terms; }
 
-        // Preload meta
-        if ( $terms ) {
-            update_termmeta_cache( wp_list_pluck( $terms, 'term_id' ) );
-        }
-
-        // Build items with normalization
+        $letter_index = self::artist_alphabet_index();
         $items = array();
-        $alphabet = 'ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی';
-        $chars = preg_split( '//u', $alphabet, -1, PREG_SPLIT_NO_EMPTY );
-        $index = array();
-        foreach ( $chars as $i => $c ) { $index[ $c ] = $i; }
-
         foreach ( $terms as $term ) {
             $norm = self::normalize( $term->name );
-            $first_chars = preg_split( '//u', $norm, -1, PREG_SPLIT_NO_EMPTY );
-            $first = $first_chars ? $first_chars[0] : '#';
-            $letter_key = isset( $index[ $first ] ) ? $first : '#';
-
-            // The known source field is `aimg2`; resolve attachment IDs to a larger display size.
-            $artist_image = function_exists( 'get_field' ) ? get_field( 'aimg2', $term ) : '';
-            if ( empty( $artist_image ) ) { $artist_image = get_term_meta( $term->term_id, 'aimg2', true ); }
-            $artist_images = self::artist_image_urls( $artist_image );
-
-            $link = get_term_link( $term );
-            $link = is_wp_error( $link ) ? '' : $link;
-
+            $characters = preg_split( '//u', $norm, -1, PREG_SPLIT_NO_EMPTY );
+            $first = $characters ? $characters[0] : '#';
             $items[] = array(
                 'term_id' => (int) $term->term_id,
                 'name' => $term->name,
                 'slug' => $term->slug,
-                'link' => $link ? esc_url_raw( $link ) : '',
                 'count' => (int) $term->count,
-                'image' => $artist_images['image'],
-                'image_fallback' => $artist_images['image_fallback'],
-                'letter' => $letter_key,
+                'letter' => isset( $letter_index[ $first ] ) ? $first : '#',
                 'norm' => $norm,
-                'sort_key' => self::artist_sort_key( $term->name, $index ),
+                'sort_key' => self::artist_sort_key( $term->name, $letter_index ),
             );
         }
-
-        // Sort
-        usort( $items, function ( $a, $b ) use ( $sort ) {
-            if ( 'songs' === $sort && $a['count'] !== $b['count'] ) {
-                return $b['count'] - $a['count'];
-            }
-            return strcmp( $a['sort_key'], $b['sort_key'] );
+        usort( $items, function ( $a, $b ) {
+            $order = strcmp( $a['sort_key'], $b['sort_key'] );
+            return 0 === $order ? ( $a['term_id'] - $b['term_id'] ) : $order;
         } );
+        AhangBan_Cache::set( $cache_key, $items, 43200 );
+        return $items;
+    }
 
-        // Filter by letter
+    public static function get_artists( $params ) {
+        $q = isset( $params['q'] ) ? trim( (string) $params['q'] ) : '';
+        if ( self::text_length( $q ) > 100 ) { $q = self::text_substr( $q, 0, 100 ); }
+        $letter = isset( $params['letter'] ) ? trim( (string) $params['letter'] ) : '';
+        if ( self::text_length( $letter ) > 4 ) { $letter = self::text_substr( $letter, 0, 4 ); }
+        $sort = isset( $params['sort'] ) ? sanitize_key( $params['sort'] ) : 'name';
+        $page = max( 1, min( 1000, (int) ( $params['page'] ?? 1 ) ) );
+        $per_page = min( 50, max( 1, (int) ( $params['per_page'] ?? 20 ) ) );
+        if ( ! in_array( $sort, array( 'name', 'songs' ), true ) ) { $sort = 'name'; }
+
+        $cache_key = AhangBan_Cache::make_key( 'artists', array( 'q' => $q, 'letter' => $letter, 'sort' => $sort, 'page' => $page, 'per_page' => $per_page ) );
+        $cached = AhangBan_Cache::get( $cache_key );
+        if ( false !== $cached ) { return $cached; }
+
+        $items = self::get_artist_index();
+        if ( is_wp_error( $items ) ) { return $items; }
+        if ( 'songs' === $sort ) {
+            usort( $items, function ( $a, $b ) {
+                if ( $a['count'] !== $b['count'] ) { return $b['count'] - $a['count']; }
+                $order = strcmp( $a['sort_key'], $b['sort_key'] );
+                return 0 === $order ? ( $a['term_id'] - $b['term_id'] ) : $order;
+            } );
+        }
+
         if ( '' !== $letter ) {
-            $letter = self::normalize( $letter );
-            // Take first char
-            $lc = preg_split( '//u', $letter, -1, PREG_SPLIT_NO_EMPTY );
-            $letter = $lc ? $lc[0] : '';
+            $characters = preg_split( '//u', self::normalize( $letter ), -1, PREG_SPLIT_NO_EMPTY );
+            $letter = $characters ? $characters[0] : '';
             if ( '' !== $letter ) {
-                $items = array_values( array_filter( $items, function ( $it ) use ( $letter ) { return $it['letter'] === $letter; } ) );
+                $items = array_values( array_filter( $items, function ( $item ) use ( $letter ) { return $item['letter'] === $letter; } ) );
             }
         }
 
-        // Filter by q
         if ( '' !== $q ) {
             $qnorm = self::normalize( $q );
-            $qnorm_lc = mb_strtolower( $qnorm, 'UTF-8' );
-            $items = array_values( array_filter( $items, function ( $it ) use ( $qnorm, $qnorm_lc ) {
-                $n = mb_strtolower( $it['norm'], 'UTF-8' );
-                return false !== mb_strpos( $n, $qnorm_lc, 0, 'UTF-8' );
+            $qnorm_lc = self::text_lower( $qnorm );
+            $items = array_values( array_filter( $items, function ( $item ) use ( $qnorm_lc ) {
+                return false !== self::text_position( self::text_lower( $item['norm'] ), $qnorm_lc );
             } ) );
         }
 
         $total = count( $items );
         $offset = ( $page - 1 ) * $per_page;
         $paged_items = array_slice( $items, $offset, $per_page );
-
-        // Remove internal keys from output
-        foreach ( $paged_items as &$it ) { unset( $it['norm'], $it['sort_key'] ); }
-        unset( $it );
-
-        // Letter counts for UI
-        $letter_counts = array();
-        // Need full unfiltered for counts but we have filtered items; do quick count from original terms fetch
-        // For simplicity, count from items before letter/q filter — we already have $terms count per letter
-        // Rebuild from all items before filters (re-fetch logic)
-        // Quick: if q is empty, compute from $items pre-filter, else show filtered counts
-        // We'll compute from original $terms
-        // (Simplified: compute from filtered total for now)
+        if ( $paged_items ) {
+            update_termmeta_cache( wp_list_pluck( $paged_items, 'term_id' ) );
+        }
+        foreach ( $paged_items as &$item ) {
+            $term = get_term( (int) $item['term_id'], self::get_taxonomy() );
+            $artist_image = '';
+            $link = '';
+            if ( $term && ! is_wp_error( $term ) ) {
+                $artist_image = function_exists( 'get_field' ) ? get_field( 'aimg2', $term ) : '';
+                if ( empty( $artist_image ) ) { $artist_image = get_term_meta( $term->term_id, 'aimg2', true ); }
+                $link = get_term_link( $term );
+                if ( is_wp_error( $link ) ) { $link = ''; }
+            }
+            $images = self::artist_image_urls( $artist_image );
+            $item['link'] = $link ? esc_url_raw( $link ) : '';
+            $item['image'] = $images['image'];
+            $item['image_fallback'] = $images['image_fallback'];
+            unset( $item['norm'], $item['sort_key'] );
+        }
+        unset( $item );
 
         $payload = array(
             'results' => $paged_items,
@@ -571,7 +708,7 @@ class AhangBan_Search {
             'page' => $page,
             'per_page' => $per_page,
         );
-        AhangBan_Cache::set( $cache_key, $payload, 43200 ); // 12h like template
+        AhangBan_Cache::set( $cache_key, $payload, 43200 );
         return $payload;
     }
 
@@ -597,15 +734,33 @@ class AhangBan_Search {
 
         global $wpdb;
         $buckets = array( 'audio' => 0, 'video' => 0, 'album' => 0, 'other' => 0 );
-        $sql = $wpdb->prepare(
-            "SELECT COALESCE(NULLIF(pm.meta_value, ''), %s) AS raw_type, COUNT(DISTINCT p.ID) AS item_count
-             FROM {$wpdb->posts} p
-             INNER JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
-             LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = %s
-             WHERE p.post_type = %s AND p.post_status = %s AND tr.term_taxonomy_id = %d
-             GROUP BY raw_type",
-            'آهنگ', 'musics_type', 'post', 'publish', (int) $term->term_taxonomy_id
+        $type_values = array_values( array_unique( array_merge(
+            self::type_filter_values( 'audio' ),
+            self::type_filter_values( 'video' ),
+            self::type_filter_values( 'album' )
+        ) ) );
+        $media_keys = array( 'music128', 'music320', 'album128', 'album320', 'video480', 'video720', 'video1080' );
+        $type_placeholders = implode( ',', array_fill( 0, count( $type_values ), '%s' ) );
+        $media_placeholders = implode( ',', array_fill( 0, count( $media_keys ), '%s' ) );
+        $sql = "SELECT COALESCE(NULLIF(pm.meta_value, ''), %s) AS raw_type, COUNT(DISTINCT p.ID) AS item_count
+                FROM {$wpdb->posts} p
+                INNER JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
+                LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = %s
+                WHERE p.post_type = %s AND p.post_status = %s AND tr.term_taxonomy_id = %d
+                  AND (pm.meta_value IN ({$type_placeholders}) OR EXISTS (
+                      SELECT 1 FROM {$wpdb->postmeta} AS ahangban_artist_media
+                      WHERE ahangban_artist_media.post_id = p.ID
+                        AND ahangban_artist_media.meta_key IN ({$media_placeholders})
+                        AND ahangban_artist_media.meta_value <> ''
+                  ))
+                GROUP BY raw_type";
+        $values = array_merge(
+            array( 'آهنگ', 'musics_type', 'post', 'publish', (int) $term->term_taxonomy_id ),
+            $type_values,
+            $media_keys
         );
+        array_unshift( $values, $sql );
+        $sql = call_user_func_array( array( $wpdb, 'prepare' ), $values );
         $rows = $wpdb->get_results( $sql, ARRAY_A );
         if ( is_array( $rows ) ) {
             foreach ( $rows as $row ) {
@@ -619,7 +774,7 @@ class AhangBan_Search {
     }
 
     public static function get_artist_detail( $identifier, $page = 1, $per_page = 10, $sort = 'new' ) {
-        $page = max( 1, (int) $page );
+        $page = max( 1, min( 1000, (int) $page ) );
         $per_page = min( 20, max( 1, (int) $per_page ) );
         if ( ! in_array( $sort, array( 'new', 'old', 'title' ), true ) ) { $sort = 'new'; }
 
@@ -666,38 +821,27 @@ class AhangBan_Search {
             if ( $val ) { $socials[ $network ] = esc_url_raw( $val ); }
         }
 
-        // Query posts for this artist
-        $order = ( 'old' === $sort ) ? 'ASC' : 'DESC';
+        // Apply the chosen ordering in SQL before pagination, including alphabetic song titles.
         $args = array(
             'post_type' => 'post',
             'post_status' => 'publish',
             'posts_per_page' => $per_page,
             'paged' => $page,
-            'orderby' => 'date',
-            'order' => $order,
+            'orderby' => 'title' === $sort ? 'none' : 'date',
+            'order' => 'old' === $sort ? 'ASC' : 'DESC',
             'tax_query' => array( array( 'taxonomy' => self::get_taxonomy(), 'field' => 'term_id', 'terms' => $term->term_id ) ),
             'no_found_rows' => false,
+            'ignore_sticky_posts' => true,
+            'ahangban_sort_title' => 'title' === $sort,
         );
-        $q = new WP_Query( $args );
+        $q = self::query_music_posts( $args );
         $total = (int) $q->found_posts;
         $results = array();
 
         if ( $q->have_posts() ) {
             update_postmeta_cache( wp_list_pluck( $q->posts, 'ID' ) );
             update_post_thumbnail_cache( $q );
-
-            // If sort=title, sort in PHP
-            if ( 'title' === $sort ) {
-                usort( $q->posts, function ( $a, $b ) {
-                    $ta = (string) get_post_meta( $a->ID, 'song', true ) ?: $a->post_title;
-                    $tb = (string) get_post_meta( $b->ID, 'song', true ) ?: $b->post_title;
-                    return strcmp( self::artist_sort_key( $ta, array() ), self::artist_sort_key( $tb, array() ) );
-                } );
-            }
-
-            foreach ( $q->posts as $post ) {
-                $results[] = self::format_post( $post );
-            }
+            foreach ( $q->posts as $post ) { $results[] = self::format_post( $post ); }
         }
 
         // Bucket counts are cached and aggregated in SQL; this avoids loading an artist's entire archive.

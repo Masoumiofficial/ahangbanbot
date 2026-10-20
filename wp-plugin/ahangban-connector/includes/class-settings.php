@@ -2,61 +2,61 @@
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 /**
- * AhangBan Settings — ذخیرهٔ امن تنظیمات ربات بدون نیاز به SSH.
- * مقادیر حساس در wp_options با autoload=no نگه‌داری می‌شوند.
+ * AhangBan Settings — non-secret bot and channel preferences.
+ * Telegram/API credentials are read from the PHP process environment only.
  */
 class AhangBan_Settings {
-    const OPTION_BOT_TOKEN    = 'ahangban_bot_token';
-    const OPTION_BOT_SECRET   = 'ahangban_bot_secret';
-    const OPTION_ADMIN_IDS    = 'ahangban_admin_ids';
-    const OPTION_BOT_USERNAME = 'ahangban_bot_username';
-    const OPTION_WEBHOOK_URL  = 'ahangban_webhook_url';
-    const OPTION_MODE         = 'ahangban_bot_mode';
+    // Legacy option names are retained only for the one-time secret cleanup.
+    const OPTION_BOT_TOKEN      = 'ahangban_bot_token';
+    const OPTION_BOT_SECRET     = 'ahangban_bot_secret';
+    const OPTION_ADMIN_IDS      = 'ahangban_admin_ids';
+    const OPTION_BOT_USERNAME   = 'ahangban_bot_username';
+    const OPTION_WEBHOOK_URL    = 'ahangban_webhook_url';
+    const OPTION_MODE           = 'ahangban_bot_mode';
     const OPTION_CHANNEL_TARGET = 'ahangban_channel_target';
     const OPTION_CHANNEL_AUTO_POST = 'ahangban_channel_auto_post';
+    const OPTION_SECRET_MIGRATION = 'ahangban_env_secrets_migrated';
 
-    public static function init() {}
+    public static function init() {
+        self::migrate_legacy_secrets();
+    }
+
+    /** Remove pre-1.5 credentials from wp_options exactly once; they are no longer read. */
+    private static function migrate_legacy_secrets() {
+        if ( '1' === (string) get_option( self::OPTION_SECRET_MIGRATION, '0' ) ) { return; }
+        delete_option( self::OPTION_BOT_TOKEN );
+        delete_option( self::OPTION_BOT_SECRET );
+        delete_option( AhangBan_Auth::OPTION_TOKEN );
+        update_option( self::OPTION_SECRET_MIGRATION, '1', false );
+    }
+
+    private static function environment_value( $name ) {
+        $value = getenv( $name );
+        if ( false !== $value && '' !== trim( (string) $value ) ) { return trim( (string) $value ); }
+        if ( isset( $_SERVER[ $name ] ) && '' !== trim( (string) $_SERVER[ $name ] ) ) { return trim( (string) $_SERVER[ $name ] ); }
+        if ( isset( $_ENV[ $name ] ) && '' !== trim( (string) $_ENV[ $name ] ) ) { return trim( (string) $_ENV[ $name ] ); }
+        return '';
+    }
 
     public static function get_bot_token() {
-        if ( defined( 'AHANGBAN_BOT_TOKEN' ) && AHANGBAN_BOT_TOKEN ) {
-            return trim( (string) AHANGBAN_BOT_TOKEN );
-        }
-        return trim( (string) get_option( self::OPTION_BOT_TOKEN, '' ) );
+        $token = self::environment_value( 'AHANGBAN_BOT_TOKEN' );
+        return true === self::validate_bot_token( $token ) ? $token : '';
     }
 
     public static function get_bot_secret() {
-        if ( defined( 'AHANGBAN_BOT_SECRET' ) && AHANGBAN_BOT_SECRET ) {
-            return (string) AHANGBAN_BOT_SECRET;
-        }
-        $value = (string) get_option( self::OPTION_BOT_SECRET, '' );
-        if ( '' === $value ) {
-            try {
-                $value = bin2hex( random_bytes( 32 ) );
-                $created = add_option( self::OPTION_BOT_SECRET, $value, '', false );
-                // Another request may have created it first; repair an existing empty option.
-                $saved = (string) get_option( self::OPTION_BOT_SECRET, '' );
-                if ( '' === $saved && ! $created ) {
-                    update_option( self::OPTION_BOT_SECRET, $value, false );
-                    $saved = (string) get_option( self::OPTION_BOT_SECRET, '' );
-                }
-                if ( '' !== $saved ) { $value = $saved; }
-            } catch ( Throwable $e ) {
-                return '';
-            }
-        }
-        return $value;
+        $secret = self::environment_value( 'AHANGBAN_BOT_SECRET' );
+        return preg_match( '/^[A-Za-z0-9_-]{1,256}$/', $secret ) ? $secret : '';
     }
 
     public static function get_admin_ids() {
         $raw = ( defined( 'AHANGBAN_ADMIN_IDS' ) && AHANGBAN_ADMIN_IDS )
             ? AHANGBAN_ADMIN_IDS
-            : get_option( self::OPTION_ADMIN_IDS, '' );
+            : self::environment_value( 'AHANGBAN_ADMIN_IDS' );
+        if ( '' === $raw ) { $raw = get_option( self::OPTION_ADMIN_IDS, '' ); }
         $ids = array();
         foreach ( preg_split( '/[\s,;]+/', (string) $raw ) as $part ) {
             $part = trim( $part );
-            if ( '' !== $part && ctype_digit( $part ) && (int) $part > 0 ) {
-                $ids[] = (int) $part;
-            }
+            if ( '' !== $part && ctype_digit( $part ) && (int) $part > 0 ) { $ids[] = (int) $part; }
         }
         return array_values( array_unique( $ids ) );
     }
@@ -65,7 +65,9 @@ class AhangBan_Settings {
         if ( defined( 'AHANGBAN_BOT_USERNAME' ) && AHANGBAN_BOT_USERNAME ) {
             return ltrim( (string) AHANGBAN_BOT_USERNAME, '@' );
         }
-        return ltrim( (string) get_option( self::OPTION_BOT_USERNAME, '' ), '@' );
+        $username = self::environment_value( 'AHANGBAN_BOT_USERNAME' );
+        if ( '' === $username ) { $username = (string) get_option( self::OPTION_BOT_USERNAME, '' ); }
+        return ltrim( $username, '@' );
     }
 
     public static function get_channel_target() {
@@ -101,8 +103,7 @@ class AhangBan_Settings {
     }
 
     public static function is_bot_configured() {
-        $token = self::get_bot_token();
-        return '' !== $token && true === self::validate_bot_token( $token );
+        return '' !== self::get_bot_token();
     }
 
     public static function is_admin( $user_id ) {
@@ -113,7 +114,7 @@ class AhangBan_Settings {
         $token = trim( (string) $token );
         if ( '' === $token ) { return true; }
         if ( ! preg_match( '/^\d{6,}:[A-Za-z0-9_-]{20,}$/', $token ) ) {
-            return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است. توکن را از @BotFather کپی کنید.' );
+            return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است. مقدار محیطی AHANGBAN_BOT_TOKEN را بررسی کنید.' );
         }
         return true;
     }
@@ -130,17 +131,10 @@ class AhangBan_Settings {
         return true;
     }
 
-    /** Validate all input first; a bad field never partially saves other fields. */
+    /** Validate all non-secret settings first; a bad field never partially saves other fields. */
     public static function save( $data ) {
         $errors = array();
         $values = array();
-
-        if ( isset( $data['bot_token'] ) ) {
-            $token = trim( (string) $data['bot_token'] );
-            $valid = self::validate_bot_token( $token );
-            if ( is_wp_error( $valid ) ) { $errors[] = $valid->get_error_message(); }
-            elseif ( '' !== $token ) { $values[ self::OPTION_BOT_TOKEN ] = $token; }
-        }
 
         if ( isset( $data['admin_ids'] ) ) {
             $admin_ids = trim( (string) $data['admin_ids'] );
@@ -190,9 +184,7 @@ class AhangBan_Settings {
         }
 
         if ( $errors ) { return $errors; }
-        foreach ( $values as $key => $value ) {
-            update_option( $key, $value, false );
-        }
+        foreach ( $values as $key => $value ) { update_option( $key, $value, false ); }
         return array();
     }
 

@@ -48,14 +48,9 @@ async def ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from ..api_client import api
     try:
         data = await api.health()
-        await update.message.reply_text(
-            f"✅ اتصال به آهنگ‌بان برقرار است\n"
-            f"🔧 وردپرس: {data.get('wp')}\n"
-            f"🐍 PHP: {data.get('php')}\n"
-            f"🎤 تاکسونومی artist: {'فعال' if data.get('taxonomy_artist') else 'غیرفعال'}\n"
-            f"🎵 آثار منتشرشده: {data.get('post_count')}\n"
-            f"⏰ زمان سرور: {data.get('time')}"
-        )
+        if data.get('status') != 'ok':
+            raise RuntimeError('پاسخ سلامت سایت معتبر نیست')
+        await update.message.reply_text("✅ اتصال امن به سرویس آهنگ‌بان برقرار است.")
     except Exception as e:
         await update.message.reply_text(
             f"❌ خطا در اتصال به سایت:\n<code>{html.escape(str(e)[:300])}</code>",

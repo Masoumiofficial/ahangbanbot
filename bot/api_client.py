@@ -2,17 +2,49 @@
 کلاینت امن ارتباط با افزونهٔ وردپرس — httpx async + retry + logging
 """
 import asyncio
+import ipaddress
 import logging
-import httpx
 from typing import Optional
+from urllib.parse import urlsplit
+
+import httpx
 
 from .config import AHANGBAN_API_BASE, AHANGBAN_API_TOKEN, CACHE_TTL
 
 log = logging.getLogger("ahangban.api")
 
 class AhangBanAPI:
+    @staticmethod
+    def _validate_base(base: str) -> str:
+        try:
+            parsed = urlsplit((base or "").strip())
+            hostname = (parsed.hostname or "").lower().rstrip(".")
+            # Force validation of malformed or out-of-range port syntax.
+            parsed.port
+        except ValueError as exc:
+            raise ValueError("AHANGBAN_API_BASE یک نشانی HTTPS معتبر نیست") from exc
+
+        if (
+            parsed.scheme != "https"
+            or not hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or hostname == "localhost"
+            or hostname.endswith((".localhost", ".local", ".internal", ".test", ".invalid"))
+        ):
+            raise ValueError("AHANGBAN_API_BASE باید HTTPS عمومی و بدون credential باشد")
+        try:
+            address = ipaddress.ip_address(hostname)
+        except ValueError:
+            address = None
+        if address is not None and not address.is_global:
+            raise ValueError("AHANGBAN_API_BASE نباید به IP خصوصی/رزروشده اشاره کند")
+        return base.strip().rstrip("/")
+
     def __init__(self, base: str = AHANGBAN_API_BASE, token: str = AHANGBAN_API_TOKEN, timeout: int = 15):
-        self.base = base.rstrip("/")
+        self.base = self._validate_base(base)
         self.token = token
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None

@@ -1,161 +1,82 @@
 # راهنمای استقرار — آهنگ‌بان
 
-## ۱. استقرار افزونهٔ وردپرس (۵ دقیقه)
+## ۱) افزونهٔ WordPress
 
-### پیش‌نیاز روی `ahangban.ir`
+### پیش‌نیاز
 
-- وردپرس ۵.۹+، PHP ۷.۴+، افزونهٔ ACF فعال
-- دسترسی مدیر (پیشخوان)
+- WordPress 5.9+، PHP 7.4+ و داده‌های واقعی قالب/سایت
+- برای webhook: امکان تعریف محیطی‌های امن در PHP-FPM/هاست
+- دسترسی مدیر برای نصب و تنظیم گزینه‌های غیرحساس
 
-### مراحل
+### نصب و اعتبارنامه‌ها
 
-1. فایل `wp-plugin/ahangban-connector` را زیپ کنید یا مستقیم آپلود کنید:
+1. ZIP نسخهٔ جاری را از پیوند README نصب کنید یا پوشهٔ `wp-plugin/ahangban-connector` را در `wp-content/plugins` قرار دهید.
+2. **پیش از ارتقا از v1.4.0:** متغیرهای `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN`, `AHANGBAN_BOT_SECRET` را در محیط PHP-FPM/هاست تنظیم کنید. اولین اجرای v1.5.0، گزینه‌های legacy این سه Secret را از `wp_options` حذف می‌کند و دیگر fallback به آن‌ها ندارد.
+3. `AHANGBAN_API_TOKEN` باید دقیقاً ۶۴ رقم hex تصادفی باشد و با مقدار هم‌نام در `.env` خصوصی ربات Python یکسان باشد. فایل `.env` ربات توسط PHP خودکار خوانده نمی‌شود.
+4. فعال‌سازی → پیشخوان **آهنگ‌بان API** → بررسی وضعیت envها. صفحه فقط «آماده/نیازمند تنظیم» نشان می‌دهد و مقدار Secret را چاپ نمی‌کند.
+5. تنظیمات غیرحساس (شناسهٔ ادمین، یوزرنیم، حالت، کانال) را ذخیره کنید.
 
-```bash
-cd wp-plugin && zip -r ahangban-connector.zip ahangban-connector
+اگر هاست envهای PHP را پشتیبانی نمی‌کند، از مدیر هاست بخواهید آن‌ها را به PHP-FPM تزریق کند. از `SetEnv`, `.htaccess` یا `.env` تنها وقتی استفاده کنید که handler هاست صریحاً پشتیبانی امن آن را تأیید کند.
+
+Health عمومی کمینه است:
+
+```json
+{"status":"ok"}
 ```
 
-2. در پیشخوان: **افزونه‌ها → افزودن → بارگذاری → انتخاب زیپ → نصب → فعال‌سازی**
+مسیرهای داده و کش با `Authorization: Bearer $AHANGBAN_API_TOKEN` محافظت می‌شوند؛ webhook از Secret header تلگرام استفاده می‌کند و مسیر وضعیت webhook فقط برای مدیر WordPress است.
 
-3. وارد منوی جدید **آهنگ‌بان API** شوید → توکن را کپی کنید.
-
-4. تست سلامت:
-
-```
-https://ahangban.ir/wp-json/ahangban/v1/health
-→ {"status":"ok","wp":"...","php":"...","taxonomy_artist":true}
-```
-
-5. تست احراز:
-
-```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" https://ahangban.ir/wp-json/ahangban/v1/search?q=معین | jq
-```
-
----
-
-## ۲. استقرار ربات (Docker — پیشنهادی)
-
-### سرور پیشنهادی
-
-- VPS ۱ vCPU / ۱GB RAM (مثلاً Hetzner CX11 یا هر VPS ارزان خارج)
-- Ubuntu 22.04
-- دامنه لازم نیست (polling)
-
-### مراحل
+## ۲) Python polling روی VPS (اختیاری)
 
 ```bash
 git clone https://github.com/Masoumiofficial/ahangbanbot.git /opt/ahangbanbot
 cd /opt/ahangbanbot
+python3 -m venv venv
+. venv/bin/activate
+pip install -r bot/requirements.txt
 cp .env.example .env
-nano .env   # BOT_TOKEN و AHANGBAN_API_TOKEN را پر کنید
+nano .env   # BOT_TOKEN و AHANGBAN_API_TOKEN را محرمانه تنظیم کنید
+python -m bot.main
+```
+
+`AHANGBAN_API_BASE` باید HTTPS یک میزبان مورداعتماد باشد. API client تغییر مسیر را دنبال نمی‌کند و HTTP، localhost، دامنه‌های local شناخته‌شده و IPهای خصوصی/رزروشدهٔ صریح را رد می‌کند؛ DNS نام میزبان API در این بررسی pin نمی‌شود، پس hostname را فقط از منبع مورداعتماد تنظیم کنید. در حالت polling، `.env` را فقط روی VPS نگه دارید و هرگز commit نکنید. برای هر Bot Token فقط یکی از polling یا webhook را فعال نگه دارید؛ اگر از webhook به polling می‌روید، از پیشخوان وب‌هوک قبلی را حذف کنید تا Telegram خطای تداخل ندهد.
+
+### Docker
+
+```bash
+cp .env.example .env  # فایل واقعی خصوصی بماند
 docker compose up -d --build
 docker compose logs -f
 ```
 
-### به‌روزرسانی
+### systemd
 
-```bash
-cd /opt/ahangbanbot
-git pull
-docker compose up -d --build
-```
+از فایل `systemd/ahangbanbot.service` استفاده کنید؛ فایل env با دسترسی محدود کاربر سرویس نگه‌داری شود. پس از نصب، `systemctl enable --now ahangbanbot` و `journalctl -u ahangbanbot -f` را اجرا کنید.
 
----
+## ۳) WordPress webhook (جایگزین polling)
 
-## ۳. استقرار با systemd
+1. در محیط PHP، `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN`, `AHANGBAN_BOT_SECRET` را تعریف کنید.
+2. SSL معتبر را فعال کنید.
+3. از پیشخوان **آهنگ‌بان API** روی «ثبت وب‌هوک در تلگرام» بزنید.
+4. در Telegram `/start` و `/ping` را امتحان کنید.
 
-```bash
-sudo useradd -r -m -d /opt/ahangbanbot ahangban
-sudo cp -r . /opt/ahangbanbot
-sudo chown -R ahangban:ahangban /opt/ahangbanbot
-cd /opt/ahangbanbot
-python3 -m venv venv
-venv/bin/pip install -r bot/requirements.txt
-cp .env.example .env && nano .env
-sudo cp systemd/ahangbanbot.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ahangbanbot
-systemctl status ahangbanbot
-journalctl -u ahangbanbot -f
-```
+Webhook Secret از هدر `X-Telegram-Bot-Api-Secret-Token` بررسی می‌شود. برای تنظیم این webhook نیازی به تعریف endpoint در قالب یا تغییر `functions.php` نیست؛ افزونهٔ اختصاصی مسیر `/wp-json/ahangban/v1/telegram/webhook` را ثبت می‌کند.
 
----
+## ۴) امنیت و محدودیت‌ها
 
-## ۴. تنظیم متغیرهای محیطی
+- هیچ Secret فعالی در `wp_options` ذخیره یا از آن خوانده نمی‌شود؛ تنظیمات معمول پیشخوان برای مقادیر غیرحساس است.
+- rate limit افزونه اتمی و در دیتابیس اصلی WordPress است. هدرهای proxy فقط با `AHANGBAN_TRUSTED_PROXY_IPS` و تطبیق IP پراکسی معتبر می‌شوند.
+- CORS wildcard وجود ندارد؛ ربات از اتصال سروربه‌سرور استفاده می‌کند.
+- درخواست‌های Telegram روی HTTPS و بدون redirect هستند. فایل رسانه با سقف ۴۹ MiB و رد مقصد محلی/خصوصی بررسی می‌شود.
+- فایل‌های صوتی/ویدیویی و هنرمندان از داده‌های واقعی WordPress خوانده می‌شوند؛ دیتابیس موازی برای داده‌های سایت ساخته نمی‌شود. SQLite در حالت Python فقط برای state/caching محلی ربات است.
+- اجرای WP-Cron و ارتباط زنده با Telegram باید روی هاست واقعی بررسی شوند؛ در محیط توسعه اتصال زنده تأیید نشده است.
 
-`.env` روی سرور ربات (هرگز کامیت نکنید):
+## ۵) نگه‌داری و عیب‌یابی
 
-```env
-BOT_TOKEN=12345:ABC...
-AHANGBAN_API_BASE=https://ahangban.ir/wp-json/ahangban/v1
-AHANGBAN_API_TOKEN=64-hex...
-ADMIN_IDS=YOUR_TELEGRAM_ID
-```
-
-برای یافتن Telegram ID خود: به [@userinfobot](https://t.me/userinfobot) پیام دهید.
-
----
-
-## ۵. وب‌هوک (اختیاری)
-
-اگر polling روی شبکهٔ ایران مسدود شد، وب‌هوک را فعال کنید:
-
-1. روی سرور با IP عمومی + دامنه + SSL:
-2. در وردپرس یک endpoint `POST /wp-json/ahangban/v1/webhook` اضافه کنید (نیاز به کدنویسی — در حال حاضر پولینگ پایدارتر است).
-3. در تلگرام:
-
-```bash
-curl -F "url=https://your-domain/hook" https://api.telegram.org/bot$BOT_TOKEN/setWebhook
-```
-
----
-
-## ۶. بکاپ و بازیابی
-
-### وردپرس
-
-- افزونه فقط یک سطر در `wp_options` اضافه می‌کند (`ahangban_connector_token`) — با بکاپ عادی وردپرس پوشش داده می‌شود.
-
-### ربات (SQLite)
-
-```bash
-# روزانه via cron
-0 3 * * * sqlite3 /opt/ahangbanbot/bot/ahangban.db ".backup /backups/ahangban-$(date +\%F).db"
-# نگه‌داری ۷ روز
-find /backups -name "ahangban-*.db" -mtime +7 -delete
-```
-
-بازیابی:
-
-```bash
-systemctl stop ahangbanbot
-cp /backups/ahangban-2026-10-18.db bot/ahangban.db
-systemctl start ahangbanbot
-```
-
----
-
-## ۷. مانیتورینگ
-
-- سلامت از تلگرام: `/ping` (همه) و `/health` + `/stats` (ادمین)
-- سلامت از سرور:
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" https://ahangban.ir/wp-json/ahangban/v1/health | jq
-```
-
-- لاگ: `journalctl -u ahangbanbot --since today -f` یا `docker compose logs --tail 100 -f`
-- آلرت: می‌توانید Uptime Kuma یا Healthchecks.io را به `/health` وصل کنید.
-
----
-
-## ۸. عیب‌یابی
-
-| علامت | علت محتمل | راه‌حل |
-|---|---|---|
-| ربات پاسخ نمی‌دهد | BOT_TOKEN اشتباه / polling مسدود | `journalctl` را ببینید؛ `/ping` از BotFather توکن را چک کنید |
-| `401/403` در لاگ | AHANGBAN_API_TOKEN اشتباه | توکن را از پیشخوان دوباره کپی کنید |
-| `artist غیرفعال` در `/health` | تاکسونومی ثبت نشده | مستند `ARTIST-ARCHIVE-DIAGNOSIS.md` در قالب را بخوانید |
-| ارسال فایل ناموفق | حجم >۵۰MB یا لینک expire | ربات خودکار لینک می‌دهد — طبیعی است |
-| Flood/429 | درخواست زیاد | صبر کنید؛ rate limit خودکار است |
+- `401/403`: مقدار API token را در PHP و ربات مقایسه کنید؛ در v1.5.0 گزینه‌های دیتابیس fallback نیستند.
+- `503` در REST: کنترل کنید `AHANGBAN_API_TOKEN` در همان worker PHP-FPM قابل‌دسترسی و ۶۴رقمی hex باشد.
+- Webhook `403`: `AHANGBAN_BOT_SECRET` را در PHP بررسی و webhook را دوباره ثبت کنید.
+- `429`: rate limit فعال شده؛ در proxyهای مورداعتماد، فقط CIDRهای واقعی را وارد کنید.
+- ارسال رسانه ناموفق: نشانی فایل واقعی، HTTPS، اندازه و cURL خروجی هاست را بررسی کنید؛ در صورت شکست، ربات پیوند واقعی اثر را نشان می‌دهد.
+- صف پیام/کانال متوقف: WP-Cron یا Cron Job هاست را بررسی کنید.
+- بکاپ WordPress شامل گزینه‌های غیرحساس، جدول‌های state و metadata انتشار است؛ محیطی‌های Secret را جداگانه و امن نگه دارید.

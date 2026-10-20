@@ -2,7 +2,7 @@
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class AhangBan_Cache {
-    const PREFIX = 'ahangban_';
+    const PREFIX = 'ahangban_cache_';
 
     public static function init() {
         // Bump the cache namespace on plugin updates so changed payloads (e.g. high-res covers) appear immediately.
@@ -12,16 +12,20 @@ class AhangBan_Cache {
             if ( defined( 'AHANGBAN_CONNECTOR_VERSION' ) ) { update_option( 'ahangban_connector_cache_build', AHANGBAN_CONNECTOR_VERSION, false ); }
         }
         // Invalidate on content changes
-        add_action( 'save_post', array( __CLASS__, 'on_save_post' ), 10, 3 );
+        // Run after post metadata (including ACF fields) has been saved.
+        add_action( 'wp_after_insert_post', array( __CLASS__, 'on_after_insert_post' ), 10, 4 );
         add_action( 'deleted_post', array( __CLASS__, 'on_delete_post' ) );
         add_action( 'trashed_post', array( __CLASS__, 'on_delete_post' ) );
         add_action( 'created_term', array( __CLASS__, 'on_term_change' ), 10, 3 );
         add_action( 'edited_term', array( __CLASS__, 'on_term_change' ), 10, 3 );
         add_action( 'delete_term', array( __CLASS__, 'on_term_change' ), 10, 3 );
+        add_action( 'added_term_meta', array( __CLASS__, 'on_term_meta_change' ), 10, 4 );
+        add_action( 'updated_term_meta', array( __CLASS__, 'on_term_meta_change' ), 10, 4 );
+        add_action( 'deleted_term_meta', array( __CLASS__, 'on_term_meta_change' ), 10, 4 );
     }
 
-    public static function on_save_post( $post_id, $post, $update ) {
-        if ( 'post' !== $post->post_type ) { return; }
+    public static function on_after_insert_post( $post_id, $post, $update, $post_before ) {
+        if ( ! is_object( $post ) || 'post' !== $post->post_type ) { return; }
         self::bump_version();
     }
 
@@ -34,11 +38,36 @@ class AhangBan_Cache {
         self::bump_version();
     }
 
+    public static function on_term_meta_change( $meta_id, $term_id, $meta_key, $meta_value ) {
+        $image_key = 'aimg2';
+        $social_keys = array( 'atelegram', 'ainstagram', 'atwitter', 'ayoutube' );
+        if ( $image_key !== $meta_key && ! in_array( $meta_key, $social_keys, true ) ) { return; }
+        $term = get_term( (int) $term_id );
+        if ( ! $term || is_wp_error( $term ) ) { return; }
+        if ( AhangBan_Search::get_taxonomy() !== $term->taxonomy && 'singer' !== $term->taxonomy ) { return; }
+        self::bump_version();
+    }
+
     public static function bump_version() {
-        // Simple version bump — stored in option
-        $v = (int) get_option( 'ahangban_cache_version', 0 );
-        update_option( 'ahangban_cache_version', $v + 1, false );
-        // Also delete known transients (pattern not possible, but version invalidates keys)
+        // Atomic bump avoids losing invalidations when two posts are saved concurrently.
+        global $wpdb;
+        $option_name = 'ahangban_cache_version';
+        if ( isset( $wpdb->options ) ) {
+            $result = $wpdb->query( $wpdb->prepare(
+                "INSERT INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, '1', 'no')
+                 ON DUPLICATE KEY UPDATE option_value = CAST(option_value AS UNSIGNED) + 1",
+                $option_name
+            ) );
+            if ( false !== $result ) {
+                wp_cache_delete( $option_name, 'options' );
+                // The option may have been cached as missing before the first atomic insert.
+                wp_cache_delete( 'notoptions', 'options' );
+                return;
+            }
+        }
+        // Defensive fallback for unusual database wrappers; do not leave the key unchanged.
+        $version = (int) get_option( $option_name, 0 );
+        update_option( $option_name, $version + 1, false );
     }
 
     public static function get_version() {

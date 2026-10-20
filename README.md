@@ -1,14 +1,13 @@
-# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.4.0
+# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.5.0
 
 > **برند:** آهنگ‌بان (AhangBan) — https://ahangban.ir  
 > **زبان:** فارسی · **جهت:** RTL · **منبع حقیقت:** دیتابیس وردپرس آهنگ‌بان  
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
-> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.4.0
-> - **دانلود مستقیم ZIP آمادهٔ نصب افزونه:** https://github.com/Masoumiofficial/ahangbanbot/raw/97f0dc4203cd6b7db1770f6bf56bceb082257982/releases/ahangban-connector-1.4.0.zip
-> - از پیشخوان WordPress → افزونه‌ها → افزودن افزونه → بارگذاری افزونه، همین ZIP را انتخاب و نصب کنید.
-> - **دایرکت‌ادمین/بدون SSH:** توکن را در پیشخوان ذخیره کنید، وب‌هوک را ست کنید؛ فایل‌های صوتی در صورت امکان مستقیم upload می‌شوند و در غیر این صورت پیوند واقعی می‌آید.
-> - جزئیات نصب و پنل ادمین: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md).
+> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.5.0
+> - **[دانلود مستقیم ZIP آمادهٔ نصب افزونه v1.5.0](https://github.com/Masoumiofficial/ahangbanbot/raw/arena/f2262129-ahangbanbot/releases/ahangban-connector-1.5.0.zip)** (`releases/ahangban-connector-1.5.0.zip`)
+> - پیش از ارتقا، اعتبارنامه‌ها را در محیط PHP هاست تنظیم کنید؛ v1.5.0 آن‌ها را از دیتابیس قدیمی پاک می‌کند و دیگر در پیشخوان ذخیره/نمایش نمی‌دهد.
+> - نصب و تنظیم webhook/کانال: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md). برای PHP-FPM باید هاست امکان تعریف Environment Variables را بدهد.
 
 ---
 
@@ -58,16 +57,17 @@
 
 **دو حالت اجرا با یک منبع دادهٔ وردپرس:**
 
-```
-هاست اشتراکی (پیشنهادی)                 VPS/Docker (اختیاری)
-[تلگرام] ⇄ Bot API ⇄ [WP Webhook PHP] ─┐  [تلگرام] ⇄ Bot API ⇄ [Python polling]
-                                       ├⇄ [افزونه ahangban-connector] ⇄ WP DB
-                                       └   (توکن API برای Python)
+**یکی از دو حالت را انتخاب کنید؛ برای یک Bot Token هم‌زمان اجرا نمی‌شوند.**
+
+```text
+[تلگرام] ⇄ Bot API ⇄ [WP Webhook PHP] ⇄ [افزونه ahangban-connector] ⇄ WP DB
+                 یا
+[تلگرام] ⇄ Bot API ⇄ [Python polling] ⇄ HTTPS+Token ⇄ [افزونه] ⇄ همان WP DB
 ```
 
 برای دایرکت‌ادمین و بدون SSH، حالت **وب‌هوک PHP** را در پیشخوان فعال کنید؛ سرویس ماندگار یا دیتابیس جدا لازم نیست. حالت Python/polling برای VPS اختیاری است و دادهٔ آهنگ/خواننده همچنان فقط از WordPress خوانده می‌شود.
 
-جزئیات: [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md) · نصب بدون SSH: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md) · [`ممیزی UX و اتصال کانال`](docs/07-CHANNEL-UX-AUDIT-v1.4.0.md) · یافته‌های مهندسی معکوس: [`docs/00-REVERSE-ENGINEERING-REPORT.md`](docs/00-REVERSE-ENGINEERING-REPORT.md)
+جزئیات: [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md) · نصب بدون SSH: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md) · [ممیزی امنیتی v1.5.0](docs/08-SECURITY-AUDIT-v1.5.0.md) · [ممیزی UX/کانال v1.4.0](docs/07-CHANNEL-UX-AUDIT-v1.4.0.md) · [مهندسی معکوس](docs/00-REVERSE-ENGINEERING-REPORT.md)
 
 ---
 
@@ -102,17 +102,17 @@ wp plugin install ahangban-connector.zip --activate
 wp plugin list
 ```
 
-### پس از فعال‌سازی (وب‌هوک، بدون SSH)
+### پیش از نصب/ارتقا و پس از فعال‌سازی
 
-1. به منوی **آهنگ‌بان API** بروید و توکن BotFather و شناسهٔ ادمین را وارد کنید.
-2. حالت `وب‌هوک` را انتخاب و ذخیره کنید؛ سپس «ست کردن وب‌هوک» را بزنید.
-3. در تلگرام `/start` بفرستید؛ برای مدیریت، `/admin` را بزنید.
-4. پنل سلامت REST: `https://ahangban.ir/wp-json/ahangban/v1/health`.
-5. (اختیاری) برای اتصال کانال، در پنل همان افزونه بخش «اتصال کانال» را باز کنید؛ `@username` یا شناسهٔ `-100…` را وارد کنید، ربات را مدیر کانال کنید، پیام آزمایشی بفرستید و سپس انتشار خودکار را روشن کنید. بهتر است یوزرنیم ربات را هم ثبت کنید تا پست کانال دکمهٔ بازکردن همان اثر در ربات داشته باشد.
+اعتبارنامه‌ها باید در **محیط پردازش PHP هاست** تنظیم شوند، نه فرم پیشخوان. برای v1.5.0 مقادیر را پیش از ارتقا آماده کنید؛ اجرای نخست نسخهٔ جدید گزینه‌های قدیمی توکن API، Bot Token و Webhook Secret را از `wp_options` حذف می‌کند.
 
-انتشار خودکار فقط برای آثار موسیقیِ تازهٔ منتشرشده و پس از فعال‌سازی است؛ نوع `musics_type` یا یکی از متافیلدهای رسانهٔ شناخته‌شده باید وجود داشته باشد. ارسال با WP-Cron انجام می‌شود و محتوای قدیمی خودکار بازنشر نمی‌شود.
+1. در محیط PHP-FPM/هاست تنظیم کنید: `AHANGBAN_API_TOKEN` (دقیقاً ۶۴ رقم hex)، `AHANGBAN_BOT_TOKEN` و `AHANGBAN_BOT_SECRET`. اگر هاست متغیر محیطی PHP را پشتیبانی نمی‌کند، از مدیر هاست بخواهید آن‌ها را به PHP-FPM تزریق کند؛ `.env` ربات به‌طور خودکار توسط PHP خوانده نمی‌شود.
+2. همان `AHANGBAN_API_TOKEN` را در `.env` خصوصی ربات Python قرار دهید. برای polling، `BOT_TOKEN` نیز همان توکن BotFather است.
+3. افزونه را فعال کنید و در منوی **آهنگ‌بان API** وضعیت متغیرها را ببینید؛ صفحه فقط آماده‌بودن Secretها را نشان می‌دهد، نه مقدار آن‌ها.
+4. شناسهٔ ادمین، یوزرنیم ربات و کانال (اختیاری) را تنظیم کنید. برای این روش، حالت **وب‌هوک** را انتخاب و «ثبت وب‌هوک در تلگرام» را بزنید؛ اگر Python polling را انتخاب کرده‌اید، وب‌هوک را حذف کنید و سرویس Python را جداگانه اجرا کنید.
+5. در تلگرام `/start` و `/ping` را امتحان کنید. Health عمومی فقط `status: ok` می‌دهد.
 
-توکن ربات بعد از ذخیره در صفحه HTML نمایش داده نمی‌شود؛ فیلد خالی مقدار فعلی را حفظ می‌کند. اگر `taxonomy_artist = ❌` بود، تاکسونومی واقعی قالب/سایت را بررسی کنید؛ افزونه به‌صورت خودکار چیزی ثبت نمی‌کند.
+انتشار خودکار فقط برای آثار موسیقی تازه‌ای است که با متافیلدهای واقعی موسیقی قابل‌شناسایی باشند؛ WP-Cron باید فعال باشد و محتوای قدیمی خودکار بازنشر نمی‌شود. اگر `taxonomy_artist = ❌` بود، تاکسونومی واقعی قالب/سایت را بررسی کنید؛ افزونه به‌صورت خودکار چیزی ثبت نمی‌کند.
 
 ---
 
@@ -178,14 +178,14 @@ ping - سلامت اتصال
 
 ## متغیرهای محیطی
 
-فایل `.env` (هرگز آن را کامیت نکنید — `.gitignore` شده است):
+فایل `.env` ربات Python (هرگز آن را کامیت نکنید — `.gitignore` شده است):
 
 ```env
-BOT_TOKEN=123456:ABC...
+BOT_TOKEN=REPLACE_WITH_BOTFATHER_TOKEN
 AHANGBAN_API_BASE=https://ahangban.ir/wp-json/ahangban/v1
-AHANGBAN_API_TOKEN=64-hex-token-from-WP-admin
-ADMIN_IDS=123456789,987654321
-BOT_USERNAME=ahangbanbot
+AHANGBAN_API_TOKEN=REPLACE_WITH_64_HEX_CHARACTERS
+# شناسه واقعی ادمین‌ها را وارد کنید؛ در صورت نامشخص‌بودن خالی بگذارید.
+ADMIN_IDS=
 LOG_LEVEL=INFO
 CACHE_TTL=300
 RATE_LIMIT_PER_MINUTE=20
@@ -193,12 +193,15 @@ RATE_LIMIT_PER_MINUTE=20
 
 | متغیر | توضیح |
 |---|---|
-| `BOT_TOKEN` | توکن BotFather (الزامی) |
-| `AHANGBAN_API_BASE` | آدرس پایهٔ API افزونه (بدون `/` انتهایی) |
-| `AHANGBAN_API_TOKEN` | توکن افزونه از پیشخوان (الزامی) |
+| `BOT_TOKEN` | توکن BotFather برای Python polling؛ در حالت WordPress webhook، همین مقدار با نام `AHANGBAN_BOT_TOKEN` به PHP داده می‌شود |
+| `AHANGBAN_API_BASE` | فقط HTTPS؛ URL پایهٔ افزونه (بدون `/` انتهایی) |
+| `AHANGBAN_API_TOKEN` | توکن تصادفیِ دقیقاً ۶۴رقمی hex؛ باید در PHP و این فایل خصوصی یکسان باشد |
 | `ADMIN_IDS` | شناسه‌های عددی ادمین با کاما (برای `/stats` و `/broadcast`) |
-| `BOT_USERNAME` | اختیاری، برای لینک‌سازی |
-| `AHANGBAN_DB_PATH` | مسیر فایل SQLite (پیش‌فرض `bot/ahangban.db`) |
+| `AHANGBAN_DB_PATH` | مسیر SQLite ربات در حالت Python (پیش‌فرض `bot/ahangban.db`) |
+
+یوزرنیم ربات برای deep-link کانال را در فیلد غیرحساس «یوزرنیم ربات» در پیشخوان WordPress وارد کنید؛ Python متغیر `BOT_USERNAME` را مصرف نمی‌کند.
+
+برای WordPress webhook، متغیرهای `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN`, `AHANGBAN_BOT_SECRET` را جداگانه در محیط **PHP-FPM/هاست** تنظیم کنید. PHP فایل `.env` ربات را خودکار نمی‌خواند. در صورت استفاده از reverse proxy، فقط IP/CIDR پراکسی‌های واقعی را در `AHANGBAN_TRUSTED_PROXY_IPS` بگذارید؛ در غیر این صورت هدرهای IP ارسال‌شده توسط کلاینت اعتماد نمی‌شوند.
 
 برای یافتن `ADMIN_IDS`: در ربات `/start` بزنید، سپس به `@userinfobot` پیام دهید تا ID خود را ببینید.
 
@@ -229,15 +232,15 @@ sudo systemctl enable --now ahangbanbot
 journalctl -u ahangbanbot -f
 ```
 
-### گزینه C — وب‌هوک داخلی وردپرس (دایرکت‌ادمین)
+### گزینه C — وب‌هوک داخلی وردپرس
 
-در حالت اشتراکی نیازی به اجرای Python یا تعریف Webhook دستی نیست: افزونه v1.4.0 از پیشخوان توکن را می‌گیرد، Secret را تنظیم می‌کند و `POST /wp-json/ahangban/v1/telegram/webhook` را با Telegram ثبت می‌کند. اتصال کانال/انتشار خودکار نیز از همان پیشخوان و بدون SSH قابل تنظیم است. مراحل کامل در [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md) آمده است.
+در این حالت پردازش پیام‌ها روی WordPress انجام می‌شود و Python polling لازم نیست؛ اما هاست باید متغیرهای محیطی PHP را پشتیبانی کند. پیش از ارتقا، `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN` و `AHANGBAN_BOT_SECRET` را در PHP-FPM تنظیم کنید؛ سپس از پیشخوان وب‌هوک را در Telegram ثبت کنید. پیشخوان فقط وضعیت متغیرها را نشان می‌دهد و Secretها را ذخیره/چاپ نمی‌کند. مراحل کامل در [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md) آمده است.
 
 ---
 
 ## مستندات API
 
-همهٔ endpointها به جز `/health` نیاز به هدر `Authorization: Bearer <TOKEN>` دارند.
+مسیرهای داده و کش به هدر `Authorization: Bearer <TOKEN>` نیاز دارند؛ `/health` عمومی و حداقلی است، `/telegram/webhook` با هدر Secret تلگرام محافظت می‌شود و وضعیت وب‌هوک فقط برای مدیر WordPress در دسترس است.
 
 | متد | مسیر | توضیح | پارامترها |
 |---|---|---|---|
@@ -266,13 +269,13 @@ curl -H "Authorization: Bearer $AHANGBAN_API_TOKEN" \
 
 ## امنیت
 
-- ✅ توکن‌ها فقط در `.env` و `wp_options (autoload=no)` — هرگز در گیت.
-- ✅ فقط `post_status=publish` برگردانده می‌شود.
-- ✅ وب‌هوک Secret header را اجباری بررسی می‌کند؛ update تکراری و rate limit مدیریت می‌شود.
-- ✅ اعتبارسنجی ورودی، دسترسی ادمین بر اساس شناسهٔ تلگرام، و توکن‌های WordPress با `autoload=no`.
-- ✅ دریافت رسانه فقط با HTTPS؛ IP خصوصی/رزروشده، مقصد محلی و redirect ناامن رد می‌شوند. سقف آپلود محدود است؛ شکست به پیوند اصلیِ اثر می‌رسد.
-- ✅ لاگ‌ها توکن Bot API را ثبت نمی‌کنند؛ پیام‌های خطا به کاربر جزئیات فنی/محرمانه نمی‌دهند.
-- ✅ `file_id` برای صوت در transient وردپرس یا SQLite حالت Python cache می‌شود.
+- ✅ اعتبارنامه‌های API، Bot و Webhook فقط از محیط PHP/`.env` خصوصی خوانده می‌شوند؛ هیچ fallback یا ذخیرهٔ جدیدی در `wp_options` نیست. گزینه‌های قدیمی در اولین اجرای v1.5.0 پاک می‌شوند.
+- ✅ API فقط آثار موسیقیِ منتشرشده و قابل‌تشخیص را برمی‌گرداند؛ نوشتهٔ معمولی یا محتوای خصوصی شامل نمی‌شود.
+- ✅ هدر webhook اجباری، update تکراری deduplicate و rate limit با شمارندهٔ اتمی در دیتابیس موجود اعمال می‌شوند.
+- ✅ هدرهای IP فقط در صورت تطبیق `REMOTE_ADDR` با فهرست trusted proxy خوانده می‌شوند؛ CORS wildcard حذف شده است.
+- ✅ درخواست‌های Telegram روی HTTPS و بدون دنبال‌کردن redirect هستند؛ timeout/5xx مبهم باعث retry رسانه و ارسال تکراری نمی‌شود.
+- ✅ دریافت رسانه فقط با HTTPS؛ IP خصوصی/رزروشده، مقصد محلی و redirect ناامن رد می‌شوند. حجم fallback محدود است و شکست به پیوند واقعی اثر می‌رسد.
+- ✅ Health عمومی فقط وضعیت کلی می‌دهد؛ نسخه‌های PHP/WordPress، نام تاکسونومی و شمارنده‌های محتوا افشا نمی‌شوند.
 
 ---
 
@@ -285,9 +288,9 @@ pip install -r bot/requirements-dev.txt
 pytest bot/tests/ -v
 ```
 
-تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link و منوی ربات هستند. آخرین اجرای محلی در 2026-10-19: **۲۶ تست موفق**؛ نتیجهٔ تفصیلی در [`docs/02-TEST-REPORT.md`](docs/02-TEST-REPORT.md). PHP در این محیط با parser گرامر PHP 7.4 بررسی ایستا می‌شود؛ اجرای واقعی به WordPress نیاز دارد.
+تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پنل ادمین و اعتبارسنجی پیکربندی هستند. در 2026-10-20، **۳۹ تست Python موفق** شد؛ `compileall` و بررسی نحوی JavaScript هم موفق بودند. هر ۸ فایل PHP با parser سازگار با دستور زبان PHP 7.4 بررسی ایستا شدند؛ این جایگزین اجرای PHP/WordPress نیست. گزارش و محدودیت‌ها: [`docs/08-SECURITY-AUDIT-v1.5.0.md`](docs/08-SECURITY-AUDIT-v1.5.0.md). گزارش تست قدیمی v1.4.0 در [`docs/02-TEST-REPORT.md`](docs/02-TEST-REPORT.md) باقی است.
 
-> برای پذیرش زنده با وردپرس واقعی: `.env` را با مقادیر واقعی پر کنید و `/ping`، یک MP3 واقعی و در صورت نیاز پیام آزمایشی کانال را بررسی کنید. موفقیت زنده ادعا نمی‌شود تا روی هاست انجام شود.
+> اتصال واقعی به WordPress، Telegram، کانال، WP-Cron و ارسال رسانه روی هاست از این محیط تأیید نشده است؛ پذیرش زنده باید روی سایت با اعتبارنامه‌های واقعی انجام شود.
 
 ---
 
@@ -298,7 +301,7 @@ pytest bot/tests/ -v
 - سلامت از سرور:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" https://ahangban.ir/wp-json/ahangban/v1/health | jq
+curl https://ahangban.ir/wp-json/ahangban/v1/health | jq
 ```
 
 - آمار ادمین در تلگرام: `/stats` → کاربران کل/فعال، تعداد جست‌وجو، بازدید.
@@ -307,7 +310,7 @@ curl -H "Authorization: Bearer $TOKEN" https://ahangban.ir/wp-json/ahangban/v1/h
 
 ## پشتیبان‌گیری
 
-- **وردپرس:** تنظیمات در `wp_options`، وضعیت حداقلی تعامل در جدول‌های `{$prefix}ahangban_bot_*` و وضعیت انتشار کانال در `wp_postmeta` ذخیره می‌شود؛ همگی با بکاپ معمول پایگاه‌دادهٔ همان وردپرس پوشش داده شوند. دیتابیس جداگانه‌ای برای داده‌های سایت ساخته نمی‌شود.
+- **وردپرس:** تنظیمات غیرحساس در `wp_options`، وضعیت حداقلی تعامل در جدول‌های `{$prefix}ahangban_bot_*` و وضعیت انتشار کانال در `wp_postmeta` ذخیره می‌شود. Secretهای فعال در دیتابیس نیستند؛ متغیرهای محیطی را جداگانه در مخزن امن هاست پشتیبان بگیرید. دیتابیس موازی برای داده‌های سایت ساخته نمی‌شود.
 - **ربات:** فایل `bot/ahangban.db` (یا `/data/ahangban.db` در Docker) را روزانه بکاپ بگیرید:
 
 ```bash
@@ -324,9 +327,9 @@ sqlite3 bot/ahangban.db ".backup backup/ahangban-$(date +%F).db"
 |---|---|---|
 | REST هسته مسدود | ✅ حل شد — endpoint اختصاصی `ahangban/v1` | تست `/health` |
 | `functions.php` رمزگذاری ionCube | ✅ حل شد — افزونه مستقل، بدون دست‌زدن به قالب | — |
-| لینک دانلود expire/404 | ⚠️ لینک‌ها از DB می‌آیند؛ افزونه HEAD نمی‌زند (عهدهٔ ربات) | ربات HEAD + fallback به صفحه |
-| ارسال فایل >۵۰MB | ⚠️ محدودیت Bot API | ربات لینک می‌دهد |
-| هاست اشتراکی بدون اجرای دائمی | ⚠️ باید ربات بیرون از هاست اجرا شود | Docker/VPS |
+| لینک رسانه در دسترس نیست | ⚠️ URLهای واقعی از دیتابیس WordPress می‌آیند | fetch امن Telegram؛ در رد قطعی، stream محدود و در نهایت لینک واقعی صفحه/منبع |
+| ارسال فایل بزرگ‌تر از سقف امن 49 MiB | ⚠️ محدودیت Bot API/هاست | ربات لینک واقعی را نشان می‌دهد؛ ارسال فایل تکراری انجام نمی‌شود |
+| هاست اشتراکی بدون اجرای دائمی Python | ✅ وب‌هوک داخلی WordPress اختیاری است | در صورت نبود PHP-FPM env یا WP-Cron، Python روی VPS/Docker اجرا شود |
 | تغییر قالب | ✅ ربات به قالب وابسته نیست | فقط `post` + `artist` + متا |
 
 ---

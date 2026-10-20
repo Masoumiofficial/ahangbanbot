@@ -22,18 +22,7 @@ class AhangBan_Telegram {
 
     /** Only classify verified music records; never broadcast an arbitrary WordPress post. */
     private static function is_music_post( $post ) {
-        if ( ! is_object( $post ) || 'post' !== $post->post_type || (int) $post->ID <= 0 ) { return false; }
-
-        $raw_type = trim( (string) get_post_meta( (int) $post->ID, 'musics_type', true ) );
-        if ( '' !== $raw_type && in_array( AhangBan_Search::classify_type( $raw_type ), array( 'audio', 'video', 'album' ), true ) ) {
-            return true;
-        }
-
-        // The reverse-engineered theme uses these exact ACF/meta keys for downloadable music media.
-        foreach ( array( 'music128', 'music320', 'album128', 'album320', 'video480', 'video720', 'video1080' ) as $meta_key ) {
-            if ( '' !== trim( (string) get_post_meta( (int) $post->ID, $meta_key, true ) ) ) { return true; }
-        }
-        return false;
+        return AhangBan_Search::is_music_record( $post );
     }
 
     /** Inspect post metadata only after WordPress/ACF have completed saving it. */
@@ -275,9 +264,7 @@ class AhangBan_Telegram {
         if ( 'GET' === $req->get_method() ) {
             return rest_ensure_response( array(
                 'status' => 'ok',
-                'message' => 'وب‌هوک آهنگ‌بان فعال است. تلگرام باید POST کند.',
-                'configured' => AhangBan_Settings::is_bot_configured(),
-                'mode' => AhangBan_Settings::get_mode(),
+                'message' => 'مسیر وب‌هوک آمادهٔ دریافت درخواست است.',
             ) );
         }
 
@@ -297,23 +284,23 @@ class AhangBan_Telegram {
             return new WP_Error( 'payload_too_large', 'درخواست وب‌هوک بیش از حد بزرگ است.', array( 'status' => 413 ) );
         }
         $update = json_decode( $body, true );
-        if ( ! is_array( $update ) || empty( $update ) || ! isset( $update['update_id'] ) || ! is_numeric( $update['update_id'] ) || (int) $update['update_id'] <= 0 ) {
+        $raw_update_id = is_array( $update ) && array_key_exists( 'update_id', $update ) ? $update['update_id'] : null;
+        $validated_update_id = filter_var( $raw_update_id, FILTER_VALIDATE_INT, array( 'options' => array( 'min_range' => 0 ) ) );
+        if ( ! is_array( $update ) || empty( $update ) || false === $validated_update_id ) {
             return new WP_Error( 'invalid_update', 'ساختار به‌روزرسانی تلگرام نامعتبر است.', array( 'status' => 400 ) );
         }
 
         // Atomic database claim prevents duplicate replies during concurrent Telegram retries.
-        $update_id = (int) $update['update_id'];
-        if ( $update_id > 0 ) {
-            $claimed = self::claim_update( $update_id );
-            if ( is_wp_error( $claimed ) ) { return $claimed; }
-            if ( ! $claimed ) { return rest_ensure_response( array( 'ok' => true, 'duplicate' => true ) ); }
-        }
+        $update_id = (int) $validated_update_id;
+        $claimed = self::claim_update( $update_id );
+        if ( is_wp_error( $claimed ) ) { return $claimed; }
+        if ( ! $claimed ) { return rest_ensure_response( array( 'ok' => true, 'duplicate' => true ) ); }
 
         try {
             self::process_update( $update );
-            if ( $update_id > 0 ) { self::complete_update( $update_id ); }
+            self::complete_update( $update_id );
         } catch ( Throwable $e ) {
-            if ( $update_id > 0 ) { self::release_update( $update_id ); }
+            self::release_update( $update_id );
             $log_message = sanitize_text_field( $e->getMessage() );
             $bot_token = AhangBan_Settings::get_bot_token();
             if ( '' !== $bot_token ) { $log_message = str_replace( $bot_token, '[redacted]', $log_message ); }
@@ -329,9 +316,16 @@ class AhangBan_Telegram {
         if ( '' === $token ) {
             return new WP_Error( 'no_token', 'توکن ربات تنظیم نشده.', array( 'status' => 400 ) );
         }
-        $resp = wp_remote_get( 'https://api.telegram.org/bot' . $token . '/getWebhookInfo', array( 'timeout' => 10 ) );
-        if ( is_wp_error( $resp ) ) { return $resp; }
+        $resp = wp_safe_remote_get( 'https://api.telegram.org/bot' . $token . '/getWebhookInfo', array(
+            'timeout' => 10,
+            'redirection' => 0,
+            'sslverify' => true,
+        ) );
+        if ( is_wp_error( $resp ) ) { return new WP_Error( 'telegram_status_unavailable', 'ارتباط امن با تلگرام برقرار نشد.', array( 'status' => 502 ) ); }
+        $code = (int) wp_remote_retrieve_response_code( $resp );
+        if ( $code < 200 || $code >= 300 ) { return new WP_Error( 'telegram_status_unavailable', 'تلگرام وضعیت وب‌هوک را نپذیرفت.', array( 'status' => 502 ) ); }
         $data = json_decode( wp_remote_retrieve_body( $resp ), true );
+        if ( ! is_array( $data ) ) { return new WP_Error( 'telegram_status_invalid', 'پاسخ وضعیت وب‌هوک نامعتبر است.', array( 'status' => 502 ) ); }
         return rest_ensure_response( $data );
     }
 
@@ -392,6 +386,25 @@ class AhangBan_Telegram {
         return 'ahangban_tg_admin_' . (int) $user_id;
     }
 
+    /** Atomic one-at-a-time guard against double-clicked broadcast confirmations. */
+    private static function acquire_broadcast_confirm_lock( $user_id ) {
+        global $wpdb;
+        $key = 'ahangban_broadcast_confirm_' . (int) $user_id;
+        $wpdb->query( $wpdb->prepare(
+            "DELETE FROM {$wpdb->options} WHERE option_name = %s AND CAST(option_value AS UNSIGNED) < %d",
+            $key,
+            time() - 60
+        ) );
+        wp_cache_delete( $key, 'options' );
+        return add_option( $key, time(), '', false );
+    }
+
+    private static function release_broadcast_confirm_lock( $user_id ) {
+        $key = 'ahangban_broadcast_confirm_' . (int) $user_id;
+        delete_option( $key );
+        wp_cache_delete( $key, 'options' );
+    }
+
     private static function text_limit( $text, $limit ) {
         $text = (string) $text;
         if ( function_exists( 'mb_substr' ) ) { return mb_substr( $text, 0, (int) $limit, 'UTF-8' ); }
@@ -422,10 +435,13 @@ class AhangBan_Telegram {
         $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
         $request_args = array(
             'timeout' => max( 5, (int) $timeout ),
+            'redirection' => 0,
+            'sslverify' => true,
             'headers' => array( 'Content-Type' => 'application/json' ),
             'body'    => wp_json_encode( $params, JSON_UNESCAPED_UNICODE ),
         );
-        $resp = wp_remote_post( $url, $request_args );
+        // The Telegram token is embedded in the API path; never forward it through redirects.
+        $resp = wp_safe_remote_post( $url, $request_args );
         if ( is_wp_error( $resp ) ) {
             $transport_error = str_replace( $token, '[redacted]', sanitize_text_field( $resp->get_error_message() ) );
             error_log( '[AhangBan Telegram] API transport failed for ' . sanitize_key( $method ) . ': ' . $transport_error );
@@ -438,7 +454,7 @@ class AhangBan_Telegram {
             $retry_after = (int) $json['parameters']['retry_after'];
             if ( $retry_after > 0 && $retry_after <= 3 ) {
                 sleep( $retry_after );
-                $resp = wp_remote_post( $url, $request_args );
+                $resp = wp_safe_remote_post( $url, $request_args );
                 if ( is_wp_error( $resp ) ) { return $resp; }
                 $code = (int) wp_remote_retrieve_response_code( $resp );
                 $json = json_decode( wp_remote_retrieve_body( $resp ), true );
@@ -452,6 +468,11 @@ class AhangBan_Telegram {
             $description = isset( $json['description'] ) ? sanitize_text_field( $json['description'] ) : 'unknown error';
             $description = str_replace( $token, '[redacted]', $description );
             error_log( '[AhangBan Telegram] API ' . sanitize_key( $method ) . ' failed (HTTP ' . $code . '): ' . $description );
+        }
+        // A proxy/5xx response can be ambiguous: Telegram may have accepted the update before
+        // the connection failed. Callers must not automatically send the same item again.
+        if ( $code >= 500 || ( $code >= 300 && $code < 400 ) ) {
+            return new WP_Error( 'telegram_ambiguous_response', 'پاسخ تلگرام نامطمئن است؛ برای جلوگیری از ارسال تکراری دوباره تلاش نشد.' );
         }
         return $json;
     }
@@ -606,12 +627,14 @@ class AhangBan_Telegram {
             $fields['supports_streaming'] = 'true';
         }
         $handle = curl_init( 'https://api.telegram.org/bot' . $token . '/' . $method );
+        if ( false === $handle ) { return new WP_Error( 'telegram_upload_init', 'آغاز ارتباط امن برای بارگذاری فایل ممکن نشد.' ); }
         curl_setopt_array( $handle, array(
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $fields,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => 6,
-            CURLOPT_TIMEOUT => 20,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
         ) );
@@ -630,6 +653,9 @@ class AhangBan_Telegram {
         if ( $code >= 400 || empty( $json['ok'] ) ) {
             $description = str_replace( $token, '[redacted]', sanitize_text_field( $json['description'] ?? 'unknown error' ) );
             error_log( '[AhangBan Telegram] File upload rejected (HTTP ' . $code . '): ' . $description );
+        }
+        if ( 429 === $code || $code >= 500 || ( $code >= 300 && $code < 400 ) ) {
+            return new WP_Error( 'telegram_upload_ambiguous', 'پاسخ بارگذاری تلگرام نامطمئن یا محدودشده است؛ برای جلوگیری از ارسال تکراری دوباره بارگذاری نشد.' );
         }
         return $json;
     }
@@ -669,17 +695,25 @@ class AhangBan_Telegram {
                 self::increment_user_counter( $user_id, 'downloads' );
                 return;
             }
+            if ( is_wp_error( $response ) ) {
+                self::send( $chat, '⚠️ پاسخ تلگرام نامشخص است؛ برای جلوگیری از ارسال تکراری، فایل دوباره فرستاده نشد. اگر فایل نرسید، کمی بعد دوباره امتحان کنید.', self::media_fallback_kb( $safe_url, $song ) );
+                return;
+            }
             if ( is_array( $response ) && empty( $response['ok'] ) ) { delete_transient( $cache_key ); }
         }
 
-        // First let Telegram fetch the URL itself. If the CDN blocks Telegram or rejects the URL,
-        // fetch it safely on the WP host and upload the bounded temp file as multipart.
+        // First let Telegram fetch the URL itself. Retry with a host upload only after a
+        // definitive Telegram rejection; transport/5xx errors are ambiguous and must not resend.
         $response = self::api_call( $method, $params, 18 );
         if ( self::telegram_ok( $response ) ) {
             $result = $response['result'] ?? array();
             $file = $result['audio']['file_id'] ?? ( $result['video']['file_id'] ?? ( $result['document']['file_id'] ?? '' ) );
             if ( $file ) { set_transient( $cache_key, $file, 30 * DAY_IN_SECONDS ); }
             self::increment_user_counter( $user_id, 'downloads' );
+            return;
+        }
+        if ( is_wp_error( $response ) ) {
+            self::send( $chat, '⚠️ پاسخ تلگرام نامشخص است؛ برای جلوگیری از ارسال تکراری، فایل دوباره فرستاده نشد. اگر فایل نرسید، کمی بعد دوباره امتحان کنید.', self::media_fallback_kb( $safe_url, $song ) );
             return;
         }
 
@@ -746,14 +780,10 @@ class AhangBan_Telegram {
         elseif ( isset( $u['callback_query']['from']['id'] ) ) { $from_id = (int) $u['callback_query']['from']['id']; }
 
         if ( $from_id ) {
-            self::touch_user( $u );
-            $rl_key = 'ahangban_rl_tg_' . $from_id;
-            $count = (int) get_transient( $rl_key );
-            if ( $count >= 20 ) {
+            if ( ! AhangBan_Auth::allow_telegram_update( $from_id, 20 ) ) {
                 if ( isset( $u['callback_query']['id'] ) ) { self::answer_cb( $u['callback_query']['id'], '⏳ کمی صبر کنید؛ تعداد درخواست‌ها زیاد است.' ); }
                 return;
             }
-            set_transient( $rl_key, $count + 1, 60 );
 
             if ( self::is_user_blocked( $from_id ) ) {
                 if ( isset( $u['callback_query']['id'] ) ) {
@@ -767,6 +797,8 @@ class AhangBan_Telegram {
                 }
                 return;
             }
+            // Avoid DB writes for rate-limited or blocked users.
+            self::touch_user( $u );
         }
 
         if ( isset( $u['callback_query'] ) ) {
@@ -989,13 +1021,7 @@ class AhangBan_Telegram {
     }
 
     private static function handle_ping( $chat ) {
-        $count = wp_count_posts( 'post' );
-        $wp_version = get_bloginfo( 'version' );
-        $taxonomy = AhangBan_Search::get_taxonomy();
-        $exists = taxonomy_exists( $taxonomy );
-        $published = ( $count && isset( $count->publish ) ) ? (int) $count->publish : 0;
-        $text = "✅ اتصال برقرار است\n🔧 وردپرس: {$wp_version}\n🐘 PHP: " . PHP_VERSION . "\n🎤 تاکسونومی: {$taxonomy} " . ( $exists ? 'فعال' : 'غیرفعال' ) . "\n🎵 آثار منتشرشده: {$published}";
-        self::send( $chat, $text );
+        self::send( $chat, '✅ ربات آهنگ‌بان فعال است و آمادهٔ دریافت جست‌وجوست.' );
     }
 
     private static function handle_search( $chat, $q, $page, $user_id = 0 ) {
@@ -1360,26 +1386,43 @@ class AhangBan_Telegram {
     private static function queue_broadcast( $chat, $message_id, $callback_id, $from_id ) {
         global $wpdb;
         if ( ! self::is_admin( $from_id ) ) { self::answer_cb( $callback_id, '⛔ دسترسی غیرمجاز.' ); return; }
-        $state = get_transient( self::admin_state_key( $from_id ) );
-        if ( ! is_array( $state ) || 'pending_broadcast' !== ( $state['action'] ?? '' ) || empty( $state['text'] ) ) {
-            self::answer_cb( $callback_id, 'پیش‌نمایش منقضی شده؛ دوباره /broadcast را بزنید.' );
+        if ( ! self::acquire_broadcast_confirm_lock( $from_id ) ) {
+            self::answer_cb( $callback_id, 'این تأیید قبلاً دریافت شده است؛ از ایجاد ارسال تکراری جلوگیری شد.' );
             return;
         }
-        $inserted = $wpdb->insert( self::broadcasts_table(), array(
-            'admin_id' => (int) $from_id,
-            'message' => (string) $state['text'],
-            'status' => 'queued',
-            'created_at' => time(),
-        ), array( '%d', '%s', '%s', '%d' ) );
-        delete_transient( self::admin_state_key( $from_id ) );
-        if ( false === $inserted ) {
-            self::answer_cb( $callback_id, 'ذخیرهٔ کار ارسال ناموفق بود.' );
-            return;
+
+        try {
+            $state = get_transient( self::admin_state_key( $from_id ) );
+            if ( ! is_array( $state ) || 'pending_broadcast' !== ( $state['action'] ?? '' ) || empty( $state['text'] ) ) {
+                self::answer_cb( $callback_id, 'پیش‌نمایش منقضی شده؛ دوباره /broadcast را بزنید.' );
+                return;
+            }
+            $inserted = $wpdb->insert( self::broadcasts_table(), array(
+                'admin_id' => (int) $from_id,
+                'message' => (string) $state['text'],
+                'status' => 'queued',
+                'created_at' => time(),
+            ), array( '%d', '%s', '%s', '%d' ) );
+            if ( false === $inserted ) {
+                self::answer_cb( $callback_id, 'ذخیرهٔ کار ارسال ناموفق بود.' );
+                return;
+            }
+
+            $job_id = (int) $wpdb->insert_id;
+            delete_transient( self::admin_state_key( $from_id ) );
+            $scheduled = wp_schedule_single_event( time() + 10, 'ahangban_bot_process_broadcast', array( $job_id ) );
+            if ( is_wp_error( $scheduled ) || ( false === $scheduled && ! wp_next_scheduled( 'ahangban_bot_process_broadcast', array( $job_id ) ) ) ) {
+                $wpdb->update( self::broadcasts_table(), array( 'status' => 'failed' ), array( 'id' => $job_id ), array( '%s' ), array( '%d' ) );
+                self::answer_cb( $callback_id, 'صف ذخیره شد، اما زمان‌بندی WP-Cron ناموفق بود؛ چیزی ارسال نشده است.' );
+                self::edit_text( $chat, (int) $message_id, '⚠️ زمان‌بندی پیام همگانی شکست خورد. WP-Cron را بررسی و پیام را دوباره ثبت کنید.', self::admin_kb() );
+                return;
+            }
+
+            self::answer_cb( $callback_id, 'ارسال در صف قرار گرفت.' );
+            self::edit_text( $chat, (int) $message_id, '⏳ پیام در صف قرار گرفت؛ ارسال دسته‌ای با WP-Cron ادامه پیدا می‌کند. ممکن است با توجه به ترافیک سایت چند دقیقه زمان ببرد.', self::admin_kb() );
+        } finally {
+            self::release_broadcast_confirm_lock( $from_id );
         }
-        $job_id = (int) $wpdb->insert_id;
-        self::answer_cb( $callback_id, 'ارسال در صف قرار گرفت.' );
-        self::edit_text( $chat, (int) $message_id, '⏳ پیام در صف قرار گرفت؛ ارسال دسته‌ای با WP-Cron ادامه پیدا می‌کند. ممکن است با توجه به ترافیک سایت چند دقیقه زمان ببرد.', self::admin_kb() );
-        wp_schedule_single_event( time() + 10, 'ahangban_bot_process_broadcast', array( $job_id ) );
     }
 
     public static function process_broadcast_batch( $job_id ) {
@@ -1395,12 +1438,26 @@ class AhangBan_Telegram {
 
         $users = self::users_table();
         $recipients = $wpdb->get_results( $wpdb->prepare(
-            "SELECT user_id,chat_id FROM {$users} WHERE blocked = 0 AND user_id > %d ORDER BY user_id ASC LIMIT %d",
+            "SELECT user_id,chat_id FROM {$users} WHERE blocked = 0 AND chat_id <> 0 AND user_id > %d ORDER BY user_id ASC LIMIT %d",
             (int) $job->cursor_user_id, self::BROADCAST_BATCH
         ), ARRAY_A );
-        if ( ! is_array( $recipients ) ) { $recipients = array(); }
+        if ( ! is_array( $recipients ) || '' !== (string) $wpdb->last_error ) {
+            // A failed recipient query is not an empty audience; unlock and retry instead of
+            // silently marking the broadcast complete.
+            $wpdb->update( $jobs, array( 'locked_until' => 0 ), array( 'id' => $job_id ), array( '%d' ), array( '%d' ) );
+            $args = array( $job_id );
+            if ( ! wp_next_scheduled( 'ahangban_bot_process_broadcast', $args ) ) {
+                wp_schedule_single_event( time() + 60, 'ahangban_bot_process_broadcast', $args );
+            }
+            error_log( '[AhangBan Telegram] Broadcast recipient query failed; job ' . $job_id . ' will retry.' );
+            return;
+        }
         if ( empty( $recipients ) ) {
-            $wpdb->update( $jobs, array( 'status' => 'done', 'locked_until' => 0 ), array( 'id' => $job_id ), array( '%s', '%d' ), array( '%d' ) );
+            $finished = $wpdb->update( $jobs, array( 'status' => 'done', 'locked_until' => 0 ), array( 'id' => $job_id ), array( '%s', '%d' ), array( '%d' ) );
+            if ( false === $finished ) {
+                error_log( '[AhangBan Telegram] Could not finalize broadcast job ' . $job_id . '.' );
+                return;
+            }
             self::send( (int) $job->admin_id, '✅ ارسال همگانی پایان یافت. موفق: ' . (int) $job->sent . ' | ناموفق: ' . (int) $job->failed, self::admin_kb(), null );
             return;
         }
@@ -1419,20 +1476,30 @@ class AhangBan_Telegram {
         }
 
         $done = count( $recipients ) < self::BROADCAST_BATCH;
-        $wpdb->update( $jobs, array(
+        $saved = $wpdb->update( $jobs, array(
             'cursor_user_id' => $cursor,
             'sent' => (int) $job->sent + $sent,
             'failed' => (int) $job->failed + $failed,
             'status' => $done ? 'done' : 'queued',
             'locked_until' => 0,
         ), array( 'id' => $job_id ), array( '%d', '%d', '%d', '%s', '%d' ), array( '%d' ) );
+        if ( false === $saved ) {
+            // The batch was already attempted; do not retry blindly and duplicate deliveries.
+            error_log( '[AhangBan Telegram] Could not save progress for broadcast job ' . $job_id . '; automatic retry stopped.' );
+            self::send( (int) $job->admin_id, '⚠️ ذخیرهٔ پیشرفت پیام همگانی ناموفق بود؛ برای جلوگیری از ارسال تکراری، ادامهٔ خودکار متوقف شد. جدول‌های افزونه را بررسی کنید.', self::admin_kb(), null );
+            return;
+        }
 
         if ( $done ) {
             self::send( (int) $job->admin_id, '✅ ارسال همگانی پایان یافت. موفق: ' . ( (int) $job->sent + $sent ) . ' | ناموفق: ' . ( (int) $job->failed + $failed ), self::admin_kb(), null );
         } else {
             $args = array( $job_id );
             if ( ! wp_next_scheduled( 'ahangban_bot_process_broadcast', $args ) ) {
-                wp_schedule_single_event( time() + 15, 'ahangban_bot_process_broadcast', $args );
+                $scheduled = wp_schedule_single_event( time() + 15, 'ahangban_bot_process_broadcast', $args );
+                if ( is_wp_error( $scheduled ) || ( false === $scheduled && ! wp_next_scheduled( 'ahangban_bot_process_broadcast', $args ) ) ) {
+                    error_log( '[AhangBan Telegram] Could not schedule next batch for broadcast job ' . $job_id . '.' );
+                    self::send( (int) $job->admin_id, '⚠️ ادامهٔ پیام همگانی در صف ماند؛ زمان‌بندی WP-Cron شکست خورد. Cron هاست را بررسی کنید.', self::admin_kb(), null );
+                }
             }
         }
     }

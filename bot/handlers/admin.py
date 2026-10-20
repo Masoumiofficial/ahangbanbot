@@ -70,12 +70,7 @@ async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     stats = await get_stats()
     try:
         health = await api.health()
-        health_line = (
-            f"✅ WP {html.escape(str(health.get('wp', '—')))} | "
-            f"PHP {html.escape(str(health.get('php', '—')))} | "
-            f"آثار: {int(health.get('post_count') or 0):,} | "
-            f"artist: {'فعال' if health.get('taxonomy_artist') else 'غیرفعال'}"
-        )
+        health_line = "✅ اتصال سایت برقرار است" if health.get("status") == "ok" else "⚠️ پاسخ سلامت نامعتبر است"
     except Exception as exc:
         health_line = f"⚠️ Health: {html.escape(str(exc)[:160])}"
     text = (
@@ -95,12 +90,7 @@ async def _send_stats(reply, context: ContextTypes.DEFAULT_TYPE):
     stats = await get_stats()
     try:
         health = await api.health()
-        health_line = (
-            f"✅ WP {html.escape(str(health.get('wp', '—')))} | "
-            f"PHP {html.escape(str(health.get('php', '—')))} | "
-            f"آثار: {int(health.get('post_count') or 0):,} | "
-            f"artist: {'فعال' if health.get('taxonomy_artist') else 'غیرفعال'}"
-        )
+        health_line = "✅ اتصال سایت برقرار است" if health.get("status") == "ok" else "⚠️ پاسخ سلامت نامعتبر است"
     except Exception as exc:
         health_line = f"⚠️ Health: {html.escape(str(exc)[:160])}"
     text = (

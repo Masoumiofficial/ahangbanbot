@@ -6,33 +6,16 @@ class AhangBan_API {
 
     public static function init() {
         add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) );
-        // CORS for bot server (allow all origins with auth — bot is server-side)
-        add_filter( 'rest_pre_serve_request', array( __CLASS__, 'cors' ), 10, 4 );
-    }
-
-    public static function cors( $served, $result, $request, $server ) {
-        $route = $request->get_route();
-        if ( strpos( $route, '/ahangban/' ) === 0 ) {
-            header( 'Access-Control-Allow-Origin: *' );
-            header( 'Access-Control-Allow-Methods: GET, POST, OPTIONS' );
-            header( 'Access-Control-Allow-Headers: Authorization, X-AhangBan-Token, Content-Type' );
-            if ( 'OPTIONS' === $_SERVER['REQUEST_METHOD'] ) {
-                status_header( 200 );
-                exit;
-            }
-        }
-        return $served;
     }
 
     public static function register_routes() {
-        // Health — no auth
+        // Deliberately minimal and public: do not expose host versions, taxonomy names, or content counts.
         register_rest_route( self::NS, '/health', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'health' ),
             'permission_callback' => '__return_true',
         ) );
 
-        // Search
         register_rest_route( self::NS, '/search', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'search' ),
@@ -45,42 +28,36 @@ class AhangBan_API {
             ),
         ) );
 
-        // Song detail
         register_rest_route( self::NS, '/song/(?P<id>\d+)', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'song' ),
             'permission_callback' => array( __CLASS__, 'check_auth' ),
         ) );
 
-        // Artists list
         register_rest_route( self::NS, '/artists', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'artists' ),
             'permission_callback' => array( __CLASS__, 'check_auth' ),
         ) );
 
-        // Artist detail
         register_rest_route( self::NS, '/artist/(?P<identifier>[^/]+)', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'artist' ),
             'permission_callback' => array( __CLASS__, 'check_auth' ),
         ) );
 
-        // Latest
         register_rest_route( self::NS, '/latest', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'latest' ),
             'permission_callback' => array( __CLASS__, 'check_auth' ),
         ) );
 
-        // Popular
         register_rest_route( self::NS, '/popular', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'popular' ),
             'permission_callback' => array( __CLASS__, 'check_auth' ),
         ) );
 
-        // Cache clear
         register_rest_route( self::NS, '/cache/clear', array(
             'methods' => 'POST',
             'callback' => array( __CLASS__, 'cache_clear' ),
@@ -89,39 +66,41 @@ class AhangBan_API {
     }
 
     public static function check_auth( WP_REST_Request $request ) {
-        $rl = AhangBan_Auth::check_rate_limit( $request );
-        if ( is_wp_error( $rl ) ) { return $rl; }
+        $rate_limit = AhangBan_Auth::check_rate_limit( $request );
+        if ( is_wp_error( $rate_limit ) ) { return $rate_limit; }
         return AhangBan_Auth::verify_request( $request );
     }
 
     public static function health( WP_REST_Request $request ) {
-        return rest_ensure_response( array(
-            'status' => 'ok',
-            'version' => AHANGBAN_CONNECTOR_VERSION,
-            'wp' => get_bloginfo( 'version' ),
-            'php' => PHP_VERSION,
-            'taxonomy_artist' => taxonomy_exists( 'artist' ),
-            'taxonomy'       => AhangBan_Search::get_taxonomy(),
-            'taxonomy_exists'=> taxonomy_exists( AhangBan_Search::get_taxonomy() ),
-            'legacy_singer'  => taxonomy_exists( 'singer' ),
-            'post_count' => (int) wp_count_posts( 'post' )->publish,
-            'time' => current_time( 'mysql', true ),
-        ) );
+        return rest_ensure_response( array( 'status' => 'ok' ) );
+    }
+
+    private static function text_length( $text ) {
+        $text = (string) $text;
+        if ( function_exists( 'mb_strlen' ) ) { return mb_strlen( $text, 'UTF-8' ); }
+        $characters = preg_split( '//u', $text, -1, PREG_SPLIT_NO_EMPTY );
+        return is_array( $characters ) ? count( $characters ) : strlen( $text );
     }
 
     public static function search( WP_REST_Request $request ) {
-        $q = $request->get_param( 'q' );
-        if ( null === $q || '' === trim( $q ) ) {
-            return new WP_Error( 'empty_query', 'عبارت جست‌وجو خالی است.', array( 'status' => 400 ) );
+        $q = trim( (string) $request->get_param( 'q' ) );
+        $length = self::text_length( $q );
+        if ( $length < 2 ) {
+            return new WP_Error( 'empty_query', 'عبارت جست‌وجو باید دست‌کم دو نویسه داشته باشد.', array( 'status' => 400 ) );
         }
-        if ( mb_strlen( $q ) > 100 ) {
+        if ( $length > 100 ) {
             return new WP_Error( 'too_long', 'عبارت جست‌وجو بیش از حد طولانی است.', array( 'status' => 400 ) );
         }
-        $type = $request->get_param( 'type' ) ?: '';
-        $page = (int) ( $request->get_param( 'page' ) ?: 1 );
-        $per_page = (int) ( $request->get_param( 'per_page' ) ?: 5 );
+
+        $type = sanitize_key( (string) $request->get_param( 'type' ) );
+        if ( '' !== $type && ! in_array( $type, array( 'audio', 'video', 'album' ), true ) ) {
+            return new WP_Error( 'invalid_type', 'نوع اثر باید audio، video یا album باشد.', array( 'status' => 400 ) );
+        }
+        $page = max( 1, min( 1000, (int) $request->get_param( 'page' ) ) );
+        $per_page = max( 1, min( 20, (int) $request->get_param( 'per_page' ) ) );
 
         $result = AhangBan_Search::query_posts( $q, $type, $page, $per_page );
+        if ( is_wp_error( $result ) ) { return $result; }
         return rest_ensure_response( $result );
     }
 
@@ -135,41 +114,51 @@ class AhangBan_API {
     }
 
     public static function artists( WP_REST_Request $request ) {
-        $params = array(
-            'q' => $request->get_param( 'q' ),
-            'letter' => $request->get_param( 'letter' ),
-            'sort' => $request->get_param( 'sort' ),
+        $q = sanitize_text_field( (string) $request->get_param( 'q' ) );
+        if ( self::text_length( $q ) > 100 ) {
+            return new WP_Error( 'too_long', 'عبارت خواننده بیش از ۱۰۰ نویسه است.', array( 'status' => 400 ) );
+        }
+        $letter = sanitize_text_field( (string) $request->get_param( 'letter' ) );
+        if ( self::text_length( $letter ) > 4 ) {
+            return new WP_Error( 'invalid_letter', 'فیلتر حرف نامعتبر است.', array( 'status' => 400 ) );
+        }
+        $result = AhangBan_Search::get_artists( array(
+            'q' => $q,
+            'letter' => $letter,
+            'sort' => sanitize_key( (string) $request->get_param( 'sort' ) ),
             'page' => $request->get_param( 'page' ),
             'per_page' => $request->get_param( 'per_page' ),
-        );
-        $result = AhangBan_Search::get_artists( $params );
+        ) );
         if ( is_wp_error( $result ) ) { return $result; }
         return rest_ensure_response( $result );
     }
 
     public static function artist( WP_REST_Request $request ) {
-        $identifier = $request->get_param( 'identifier' );
-        $page = (int) ( $request->get_param( 'page' ) ?: 1 );
-        $per_page = (int) ( $request->get_param( 'per_page' ) ?: 10 );
-        $sort = $request->get_param( 'sort' ) ?: 'new';
-
-        $result = AhangBan_Search::get_artist_detail( $identifier, $page, $per_page, $sort );
+        $identifier = (string) $request->get_param( 'identifier' );
+        if ( strlen( $identifier ) > 200 ) {
+            return new WP_Error( 'invalid_artist', 'شناسهٔ خواننده بیش از حد طولانی است.', array( 'status' => 400 ) );
+        }
+        $page = max( 1, min( 1000, (int) $request->get_param( 'page' ) ) );
+        $requested_per_page = $request->get_param( 'per_page' );
+        $per_page = max( 1, min( 20, ( null === $requested_per_page || '' === $requested_per_page ) ? 10 : (int) $requested_per_page ) );
+        $sort = sanitize_key( (string) $request->get_param( 'sort' ) );
+        $result = AhangBan_Search::get_artist_detail( $identifier, $page, $per_page, $sort ?: 'new' );
         if ( is_wp_error( $result ) ) { return $result; }
         return rest_ensure_response( $result );
     }
 
     public static function latest( WP_REST_Request $request ) {
-        $page = (int) ( $request->get_param( 'page' ) ?: 1 );
-        $per_page = (int) ( $request->get_param( 'per_page' ) ?: 5 );
-        $result = AhangBan_Search::get_latest( $page, $per_page );
-        return rest_ensure_response( $result );
+        $page = max( 1, min( 1000, (int) $request->get_param( 'page' ) ) );
+        $requested_per_page = $request->get_param( 'per_page' );
+        $per_page = max( 1, min( 20, ( null === $requested_per_page || '' === $requested_per_page ) ? 5 : (int) $requested_per_page ) );
+        return rest_ensure_response( AhangBan_Search::get_latest( $page, $per_page ) );
     }
 
     public static function popular( WP_REST_Request $request ) {
-        $page = (int) ( $request->get_param( 'page' ) ?: 1 );
-        $per_page = (int) ( $request->get_param( 'per_page' ) ?: 5 );
-        $result = AhangBan_Search::get_popular( $page, $per_page );
-        return rest_ensure_response( $result );
+        $page = max( 1, min( 1000, (int) $request->get_param( 'page' ) ) );
+        $requested_per_page = $request->get_param( 'per_page' );
+        $per_page = max( 1, min( 20, ( null === $requested_per_page || '' === $requested_per_page ) ? 5 : (int) $requested_per_page ) );
+        return rest_ensure_response( AhangBan_Search::get_popular( $page, $per_page ) );
     }
 
     public static function cache_clear( WP_REST_Request $request ) {

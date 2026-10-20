@@ -99,9 +99,9 @@ async def error_handler(update, context):
 def build_app() -> Application:
     errs = validate()
     if errs:
-        for e in errs:
-            log.error("Config error: %s", e)
-        log.warning("ربات با پیکربندی ناقص اجرا می‌شود — برخی قابلیت‌ها کار نمی‌کنند.")
+        for error in errs:
+            log.error("Config error: %s", error)
+        raise RuntimeError("پیکربندی ربات نامعتبر است؛ متغیرهای محیطی الزامی را بررسی کنید.")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -163,8 +163,8 @@ def build_app() -> Application:
     return app
 
 async def main():
-    await init_db()
     app = build_app()
+    await init_db()
 
     # Graceful shutdown
     stop = asyncio.Event()
