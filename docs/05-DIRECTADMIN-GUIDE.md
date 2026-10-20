@@ -4,7 +4,7 @@
 
 ## ۱) نصب افزونه
 1. فایل آمادهٔ نصب v1.4.0 را مستقیم دانلود کنید:
-   `https://github.com/Masoumiofficial/ahangbanbot/releases/download/v1.4.0/ahangban-connector-1.4.0.zip`
+   `https://github.com/Masoumiofficial/ahangbanbot/raw/refs/heads/arena/f2262129-ahangbanbot/releases/ahangban-connector-1.4.0.zip`
 2. وردپرس → افزونه‌ها → افزودن افزونه → بارگذاری افزونه؛ ZIP را انتخاب و نصب کنید. یا در دایرکت‌ادمین آن را در `domains/ahangban.ir/public_html/wp-content/plugins` بارگذاری و Extract کنید؛ فایل ZIP پوشهٔ افزونه را از قبل دارد.
 3. وردپرس → افزونه‌ها → فعال‌سازی/به‌روزرسانی **AhangBan Connector**.
 
