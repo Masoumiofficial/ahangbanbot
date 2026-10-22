@@ -33,7 +33,7 @@
 |---|---|---|
 | افزونه WP | PHP 7.4+ / 8.x (سازگار با ionCube Loader) | بدون وابستگی خارجی، فقط WP Core |
 | ربات | **Python 3.11 + python-telegram-bot 21.x (async)** | پایدار، تایپ‌شده، جامعهٔ بزرگ، مناسب برای پولینگ طولانی |
-| DB محلی ربات | **SQLite + aiosqlite** | بدون نیاز به Postgres روی هاست اشتراکی؛ برای ۱۰k کاربر کافی، قابل مهاجرت به Postgres |
+| DB محلی ربات | **SQLite + aiosqlite** | بدون نیاز به Postgres روی هاست اشتراکی؛ برای ۱۰k کاربر کافی؛ فقط state/preferences محلی است و mirror دادهٔ WordPress نیست |
 | کش WP | Transients API (۱۲h برای فهرست خوانندگان، ۵m برای جست‌وجو) | هماهنگ با کش فعلی قالب |
 | کش ربات | TTL در SQLite + حافظه | جلوگیری از حملهٔ Flood |
 | احراز هویت API | `Authorization: Bearer <64-hex token>`؛ وب‌هوک با Secret header مجزا | بدون OAuth؛ هر مسیر حداقل مجوز لازم را دارد |
@@ -50,6 +50,7 @@
 5. کارت آهنگ: `song/{id}` → جزئیات + لینک‌های دانلود معتبر + دکمهٔ خواننده + اشتراک‌گذاری.
 6. ارسال فایل: ابتدا Telegram از URL عمومی HTTPS دریافت می‌کند؛ فقط پس از رد قطعی، WordPress فایل را با سقف 49 MiB به‌صورت stream می‌گیرد و با cURL بارگذاری می‌کند. خطای مبهم/timeout باعث ارسال تکراری نمی‌شود؛ در صورت شکست، پیوند واقعی اثر ارائه می‌شود.
 7. کش WordPress: کلیدها با نسخهٔ namespace ساخته می‌شوند (۵ دقیقه برای جست‌وجو/اثر، ۱۰ دقیقه برای جزئیات هنرمند، ۱۲ ساعت برای فهرست هنرمندان). تغییر نوشته/ترم نسخه را اتمی افزایش می‌دهد؛ پاک‌سازی دستی نیز همین namespace را عوض می‌کند.
+8. پسند آهنگ‌ها (با `post_id`) و دنبال‌کردن هنرمند (با `term_id` واقعی) در SQLite ربات ذخیره می‌شوند؛ اطلاعات اصلی آهنگ/هنرمند از API WordPress می‌آید. اعلان خودکار follow در MVP وجود ندارد.
 
 ---
 
@@ -69,9 +70,9 @@
 `GET /wp-json/ahangban/v1/song/{id}` → جزئیات + lyrics (اختیاری) + related (۳تا)
 
 ### انتشار دستی در کانال
-`POST /wp-json/ahangban/v1/channel/publish` با بدنهٔ JSON `{"post_id":123}` و Bearer token معتبر. فقط پست موسیقی با وضعیت `publish` پذیرفته می‌شود؛ مقصد کانال و Bot Token از تنظیمات/محیط WordPress گرفته می‌شوند. این عملیات از انتشار خودکار مستقل است و در خطای مبهم Telegram retry نمی‌شود.
+`POST /wp-json/ahangban/v1/channel/publish` با بدنهٔ JSON `{"post_id":123}` و Bearer token معتبر. فقط پست موسیقی با وضعیت `publish` پذیرفته می‌شود؛ مقصد کانال و Bot Token از تنظیمات/محیط WordPress گرفته می‌شوند. این عملیات از انتشار خودکار مستقل است و در خطای مبهم Telegram retry نمی‌شود. از v1.6.2 پاسخ موفق شامل `channel_target` و در وضعیت‌های `unavailable`/`failed` فقط URLهای `128`/`320` واقعی برای fallback کنترل‌شدهٔ Python است.
 
-در v1.5.3، ارسال دستی و خودکار از یک caption builder استفاده می‌کنند: نام‌های واقعی `song`/`artist` وردپرس، هشتگ از taxonomy هنرمند، لینک رسمی و شناسهٔ کانال. دو دکمهٔ deep-link ربات و صفحهٔ سایت روی کارت و ویس هستند. پس از موفقیت کارت، WP-Cron یک Voice Note از ۶۰ ثانیهٔ اول `music128` (fallback به `music320`) می‌سازد و با `reply_to_message_id` به کارت وصل می‌کند. پردازش با `proc_open` و FFmpeg `libopus`، فایل موقت محدود و انتقال multipart امن انجام می‌شود؛ در نبود FFmpeg/Opus یا source، کارت اصلی می‌ماند ولی ویس ارسال نمی‌شود؛ هیچ‌گاه کل آهنگ به‌عنوان نمونه جایگزین نمی‌شود و پاسخ مبهم retry نمی‌شود.
+ارسال دستی و خودکار از یک caption builder استفاده می‌کنند: نام‌های واقعی `song`/`artist` وردپرس، هشتگ از taxonomy هنرمند، لینک رسمی و شناسهٔ کانال. دو دکمهٔ deep-link ربات و صفحهٔ سایت روی کارت و ویس هستند. پس از موفقیت انتشار دستی، WordPress وضعیت صف را برمی‌گرداند: اگر `queued` باشد، Python fallback نمی‌فرستد؛ فقط `unavailable`/`failed` اجازه می‌دهد Python polling مقصد و URLهای صوتی واقعی همان پست را بگیرد، با FFmpeg/libopus در محیط خود OGG/Opus بسازد و یک reply ارسال کند. فایل کامل جای نمونه فرستاده نمی‌شود. شکست تبدیل، خطای قطعی Telegram یا نتیجهٔ مبهم صریح گزارش می‌شود؛ ارسال مبهم retry نمی‌شود. Webhook PHP مستقل است و برای Voice Note همچنان به `proc_open`، FFmpeg/libopus و WP-Cron روی WordPress نیاز دارد.
 
 ### خواننده
 `GET /wp-json/ahangban/v1/artist/{slug_or_id}?page=1&per_page=5&sort=new` → پروفایل + آثار صفحه‌بندی

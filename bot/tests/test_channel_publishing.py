@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from bot.api_client import APIError, AhangBanAPI
+from bot.api_client import AhangBanAPI, APIError
 from bot.handlers.admin import (
     _admin_markup,
     _channel_publish_preview,
     admin_channel_publish_confirm_callback,
-    admin_channel_publish_prepare_callback,
     admin_channel_publish_menu_callback,
+    admin_channel_publish_prepare_callback,
     admin_menu_callback,
 )
 from bot.utils.keyboards import song_card
@@ -173,16 +173,42 @@ async def test_channel_publish_confirmation_is_consumed_before_sending():
         "preview_status": "queued",
         "preview_duration": 60,
     })
+    voice_fallback = AsyncMock()
     with patch("bot.handlers.admin.is_admin", return_value=True), patch(
         "bot.handlers.admin.api.publish_channel_post", new=publish
-    ):
+    ), patch("bot.handlers.admin.send_python_voice_preview", new=voice_fallback):
         await admin_channel_publish_confirm_callback(update, context)
         await admin_channel_publish_confirm_callback(update, context)
     publish.assert_awaited_once_with(731)
+    voice_fallback.assert_not_awaited()
     assert "channel_publish_pending" not in context.user_data
     assert any("در کانال منتشر شد" in text for text, _ in query.edits)
     assert any("صف WP-Cron" in text for text, _ in query.edits)
     assert any("ویس 60 ثانیه‌ای" in text for text, _ in query.edits)
+
+
+@pytest.mark.asyncio
+async def test_missing_channel_message_id_is_ambiguous_and_never_falls_back():
+    update, query = _callback_update("admin:channel_publish_confirm:731", user_id=100)
+    context = SimpleNamespace(user_data={
+        "channel_publish_pending": {"post_id": 731, "created_at": time.time()},
+    }, bot=SimpleNamespace())
+    publish = AsyncMock(return_value={
+        "status": "sent",
+        "post_id": 731,
+        "preview_status": "unavailable",
+        "channel_target": "@Ahangban_ir",
+    })
+    fallback = AsyncMock()
+    with patch("bot.handlers.admin.is_admin", return_value=True), patch(
+        "bot.handlers.admin.api.publish_channel_post", new=publish
+    ), patch("bot.handlers.admin.send_python_voice_preview", new=fallback):
+        await admin_channel_publish_confirm_callback(update, context)
+
+    publish.assert_awaited_once_with(731)
+    fallback.assert_not_awaited()
+    assert any("نتیجهٔ ارسال قطعی نیست" in text for text, _ in query.edits)
+    assert not any("در کانال منتشر شد" in text for text, _ in query.edits)
 
 
 @pytest.mark.asyncio
@@ -204,3 +230,36 @@ async def test_channel_publish_confirmation_reports_disabled_voice_preview():
         await admin_channel_publish_confirm_callback(update, context)
     publish.assert_awaited_once_with(731)
     assert any("پیش‌نمایش ویس از تنظیمات پیشخوان خاموش است" in text for text, _ in query.edits)
+
+
+@pytest.mark.asyncio
+async def test_unavailable_wordpress_preview_uses_python_fallback_with_current_sources():
+    update, query = _callback_update("admin:channel_publish_confirm:731", user_id=100)
+    context = SimpleNamespace(user_data={
+        "channel_publish_pending": {
+            "post_id": 731,
+            "created_at": time.time(),
+            "preview_sources": {"128": "https://cdn.example.org/old.mp3"},
+        },
+    }, bot=SimpleNamespace())
+    publish = AsyncMock(return_value={
+        "status": "sent",
+        "post_id": 731,
+        "message_id": 99,
+        "channel_target": "@Ahangban_ir",
+        "preview_status": "unavailable",
+        "preview_duration": 45,
+        "preview_sources": {"128": "https://cdn.example.org/current.mp3"},
+    })
+    fallback = AsyncMock(return_value={"status": "sent", "message_id": 100})
+    with patch("bot.handlers.admin.is_admin", return_value=True), patch(
+        "bot.handlers.admin.api.publish_channel_post", new=publish
+    ), patch("bot.handlers.admin.send_python_voice_preview", new=fallback):
+        await admin_channel_publish_confirm_callback(update, context)
+
+    fallback.assert_awaited_once()
+    assert fallback.await_args.kwargs["channel_target"] == "@Ahangban_ir"
+    assert fallback.await_args.kwargs["reply_to_message_id"] == 99
+    assert fallback.await_args.kwargs["sources"] == {"128": "https://cdn.example.org/current.mp3"}
+    assert fallback.await_args.kwargs["duration"] == 45
+    assert any("با ربات Python" in text and "100" in text for text, _ in query.edits)

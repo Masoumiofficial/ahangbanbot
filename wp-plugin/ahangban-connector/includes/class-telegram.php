@@ -145,13 +145,18 @@ class AhangBan_Telegram {
         }
 
         $message_id = (int) ( $response['result']['message_id'] ?? 0 );
+        if ( $message_id <= 0 ) {
+            return new WP_Error( 'telegram_delivery_unknown', 'پاسخ تلگرام شناسهٔ پیام منتشرشده را نداشت؛ کانال را بررسی کنید و برای جلوگیری از تکرار دوباره ارسال نکنید.', array( 'status' => 502 ) );
+        }
         $preview_status = self::queue_channel_preview( $post_id, $target, $message_id );
         return array(
             'status' => 'sent',
             'post_id' => $post_id,
             'delivery' => $delivery,
             'message_id' => $message_id,
+            'channel_target' => $target,
             'preview_status' => $preview_status,
+            'preview_sources' => in_array( $preview_status, array( 'unavailable', 'failed' ), true ) ? self::channel_preview_source_urls( $song ) : array(),
             'preview_duration' => AhangBan_Settings::is_channel_preview_enabled() ? AhangBan_Settings::get_channel_preview_seconds() : 0,
         );
     }
