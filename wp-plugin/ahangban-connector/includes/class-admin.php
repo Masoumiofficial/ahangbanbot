@@ -41,7 +41,7 @@ class AhangBan_Admin {
     }
 
     private static function telegram_api( $token, $method, $params = array() ) {
-        if ( '' === $token ) { return new WP_Error( 'no_token', 'متغیر محیطی AHANGBAN_BOT_TOKEN تنظیم نشده است.' ); }
+        if ( '' === $token ) { return new WP_Error( 'no_token', 'توکن ربات در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.' ); }
         if ( ! in_array( $method, array( 'sendMessage', 'setWebhook', 'deleteWebhook' ), true ) ) {
             return new WP_Error( 'invalid_method', 'عملیات تلگرام نامعتبر است.' );
         }
@@ -83,6 +83,23 @@ class AhangBan_Admin {
             self::redirect_after_action();
         }
 
+        if ( 'save_credentials' === $action ) {
+            $errors = AhangBan_Settings::save( array(
+                'api_token' => isset( $_POST['api_token'] ) ? wp_unslash( $_POST['api_token'] ) : '',
+                'bot_token' => isset( $_POST['bot_token'] ) ? wp_unslash( $_POST['bot_token'] ) : '',
+                'bot_secret' => isset( $_POST['bot_secret'] ) ? wp_unslash( $_POST['bot_secret'] ) : '',
+                'clear_api_token' => isset( $_POST['clear_api_token'] ) ? '1' : '',
+                'clear_bot_token' => isset( $_POST['clear_bot_token'] ) ? '1' : '',
+                'clear_bot_secret' => isset( $_POST['clear_bot_secret'] ) ? '1' : '',
+            ) );
+            if ( empty( $errors ) ) {
+                add_settings_error( 'ahangban_connector', 'credentials_saved', '✅ تنظیمات اعتبارنامه انجام شد؛ مقدارها در این صفحه نمایش داده نمی‌شوند و محیط PHP در صورت وجود اولویت دارد.', 'updated' );
+            } else {
+                foreach ( $errors as $error ) { add_settings_error( 'ahangban_connector', 'credentials_err', $error, 'error' ); }
+            }
+            self::redirect_after_action();
+        }
+
         if ( 'save_bot' === $action ) {
             $errors = AhangBan_Settings::save( array(
                 'bot_username' => isset( $_POST['bot_username'] ) ? wp_unslash( $_POST['bot_username'] ) : null,
@@ -114,7 +131,7 @@ class AhangBan_Admin {
             $token = AhangBan_Settings::get_bot_token();
             $target = AhangBan_Settings::get_channel_target();
             if ( '' === $token || '' === $target ) {
-                add_settings_error( 'ahangban_connector', 'channel_test_missing', 'متغیر AHANGBAN_BOT_TOKEN یا شناسهٔ کانال تنظیم نشده است.', 'error' );
+                add_settings_error( 'ahangban_connector', 'channel_test_missing', 'توکن ربات یا شناسهٔ کانال در تنظیمات افزونه موجود نیست.', 'error' );
                 self::redirect_after_action();
             }
             $response = self::telegram_api( $token, 'sendMessage', array(
@@ -140,7 +157,7 @@ class AhangBan_Admin {
             $token = AhangBan_Settings::get_bot_token();
             $secret = AhangBan_Settings::get_bot_secret();
             if ( '' === $token || '' === $secret ) {
-                add_settings_error( 'ahangban_connector', 'webhook_env_missing', 'متغیرهای AHANGBAN_BOT_TOKEN و AHANGBAN_BOT_SECRET را در محیط PHP تنظیم کنید.', 'error' );
+                add_settings_error( 'ahangban_connector', 'webhook_env_missing', 'توکن ربات یا Secret وب‌هوک در محیط PHP یا تنظیمات افزونه موجود نیست.', 'error' );
                 self::redirect_after_action();
             }
             $url = set_url_scheme( rest_url( 'ahangban/v1/telegram/webhook' ), 'https' );
@@ -177,7 +194,7 @@ class AhangBan_Admin {
         if ( 'test_message' === $action ) {
             $admins = AhangBan_Settings::get_admin_ids();
             if ( ! AhangBan_Settings::is_bot_configured() || empty( $admins ) ) {
-                add_settings_error( 'ahangban_connector', 'test_err', 'توکن محیطی ربات یا شناسهٔ ادمین تنظیم نشده است.', 'error' );
+                add_settings_error( 'ahangban_connector', 'test_err', 'توکن ربات یا شناسهٔ ادمین در تنظیمات موجود نیست.', 'error' );
                 self::redirect_after_action();
             }
             $response = self::telegram_api( AhangBan_Settings::get_bot_token(), 'sendMessage', array(
@@ -236,7 +253,7 @@ class AhangBan_Admin {
                 <div>
                     <p class="ab-eyebrow">AHANGBAN CONNECTOR · مدیریت اتصال</p>
                     <h1>اتصال آهنگ‌بان <span class="ab-version">v<?php echo esc_html( AHANGBAN_CONNECTOR_VERSION ); ?></span></h1>
-                    <p class="ab-intro">تنظیمات API، وب‌هوک و انتشار کانال را مدیریت کنید. اعتبارنامه‌ها فقط از محیط PHP خوانده می‌شوند و در این صفحه یا پایگاه‌داده نمایش/ذخیره نمی‌شوند.</p>
+                    <p class="ab-intro">تنظیمات API، وب‌هوک و انتشار کانال را مدیریت کنید. متغیرهای محیط PHP اولویت دارند؛ در صورت نبودشان می‌توانید اعتبارنامه‌ها را از این پیشخوان تنظیم کنید.</p>
                 </div>
                 <a class="button button-secondary" href="<?php echo esc_url( $health_url ); ?>" target="_blank" rel="noopener noreferrer">بررسی عمومی سلامت</a>
             </header>
@@ -247,9 +264,9 @@ class AhangBan_Admin {
                     <span class="ab-muted">آخرین وضعیت از همین نصب وردپرس</span>
                 </div>
                 <div class="ab-status-grid">
-                    <div class="ab-status-item"><span>API token در PHP</span><strong class="<?php echo $api_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $api_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
-                    <div class="ab-status-item"><span>Bot token در PHP</span><strong class="<?php echo $bot_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $bot_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
-                    <div class="ab-status-item"><span>Secret وب‌هوک در PHP</span><strong class="<?php echo $secret_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $secret_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
+                    <div class="ab-status-item"><span>توکن API</span><strong class="<?php echo $api_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $api_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
+                    <div class="ab-status-item"><span>توکن ربات تلگرام</span><strong class="<?php echo $bot_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $bot_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
+                    <div class="ab-status-item"><span>Secret وب‌هوک</span><strong class="<?php echo $secret_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $secret_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
                     <div class="ab-status-item"><span>نسخهٔ PHP / وردپرس</span><strong><?php echo esc_html( PHP_VERSION . ' / ' . get_bloginfo( 'version' ) ); ?></strong></div>
                     <div class="ab-status-item"><span>تاکسونومی هنرمند</span><strong><?php echo $taxonomy_exists ? 'فعال · ' . esc_html( $taxonomy ) : 'ثبت نشده'; ?></strong></div>
                     <div class="ab-status-item"><span>هنرمندان / نوشته‌های منتشرشده</span><strong><?php echo esc_html( number_format_i18n( (int) $artist_count ) . ' / ' . number_format_i18n( $published_posts ) ); ?></strong></div>
@@ -262,20 +279,45 @@ class AhangBan_Admin {
                 </div>
             </section>
 
-            <section class="ab-card ab-card--primary" aria-labelledby="ab-env-title">
+            <section class="ab-card ab-card--primary" aria-labelledby="ab-credentials-title">
                 <div class="ab-card-heading">
-                    <div><span class="ab-step">۰۲</span><h2 id="ab-env-title">اعتبارنامه‌های محیط PHP</h2></div>
-                    <span class="ab-badge ab-badge--secure">بدون ذخیره در دیتابیس</span>
+                    <div><span class="ab-step">۰۲</span><h2 id="ab-credentials-title">اعتبارنامه‌های API و تلگرام</h2></div>
+                    <span class="ab-badge ab-badge--secure">متغیر محیطی اولویت دارد</span>
                 </div>
-                <p>این نام‌ها باید در محیط پردازش PHP/‏PHP-FPM هاست تعریف شوند؛ فایل <code>.env</code> ربات Python به‌طور خودکار توسط PHP خوانده نمی‌شود. مقدارها را در بخش Environment Variables هاست تنظیم کنید یا از مدیر هاست بخواهید در محیط PHP-FPM تزریق کند.</p>
-                <div class="ab-env-list" dir="ltr">
-                    <code>AHANGBAN_API_TOKEN</code><span>توکن مشترک ۶۴رقمی hex؛ با <code>AHANGBAN_API_TOKEN</code> در `.env` ربات یکی باشد.</span>
-                    <code>AHANGBAN_BOT_TOKEN</code><span>توکن BotFather برای وب‌هوک، کانال و ارسال فایل.</span>
-                    <code>AHANGBAN_BOT_SECRET</code><span>Secret وب‌هوک، فقط حروف انگلیسی/عدد، خط تیره یا زیرخط؛ پیشنهاد: ۶۴رقمی hex.</span>
-                    <code>AHANGBAN_TRUSTED_PROXY_IPS</code><span>اختیاری؛ IP/CIDR پراکسی‌های مورداعتماد، با کاما جدا شود. بدون این مقدار، هدرهای X-Forwarded نادیده گرفته می‌شوند.</span>
-                </div>
-                <p class="ab-notice ab-notice--warning"><strong>مهم برای ارتقا از v1.4.0:</strong> نسخهٔ 1.5.0 هنگام نخستین اجرا، توکن‌های قدیمی API، ربات و وب‌هوک را از <code>wp_options</code> حذف می‌کند. ابتدا مقادیر را در محیط PHP و `.env` خصوصی ربات تنظیم کنید؛ بعد افزونه را ارتقا دهید. این صفحه هیچ مقداری از Secretها را چاپ نمی‌کند.</p>
-                <p class="ab-muted">برای ساخت توکن قوی، روی دستگاه امن خود از <code dir="ltr">openssl rand -hex 32</code> استفاده کنید. همان مقدار API را در محیط PHP و <code dir="ltr">.env</code> سرویس Python بگذارید؛ Secretها را در Git، گفتگو یا تنظیمات معمول وردپرس قرار ندهید.</p>
+                <p>اگر هاست امکان تعریف متغیر محیطی برای PHP را ندارد، مقادیر را اینجا وارد کنید. فیلدهای رمزواژه پس از ذخیره خالی می‌مانند؛ خالی‌گذاشتن فیلد مقدار قبلی را حفظ می‌کند. اگر متغیر محیط PHP تنظیم شده باشد، همان مقدار بر مقدار ذخیره‌شده در WordPress اولویت دارد.</p>
+                <form method="post" class="ab-form-block">
+                    <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
+                    <input type="hidden" name="ahangban_action" value="save_credentials">
+                    <table class="form-table" role="presentation">
+                        <tr>
+                            <th scope="row"><label for="api_token">توکن API</label></th>
+                            <td>
+                                <input type="password" id="api_token" name="api_token" value="" dir="ltr" class="regular-text" maxlength="64" autocomplete="new-password" placeholder="برای حفظ مقدار قبلی، خالی بگذارید">
+                                <label><input type="checkbox" name="clear_api_token" value="1"> حذف مقدار ذخیره‌شده</label>
+                                <p class="description">دقیقاً ۶۴ نویسهٔ hex. اگر Python polling دارید، باید با <code>AHANGBAN_API_TOKEN</code> در فایل `.env` ربات یکسان باشد.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="bot_token">توکن BotFather</label></th>
+                            <td>
+                                <input type="password" id="bot_token" name="bot_token" value="" dir="ltr" class="regular-text" maxlength="512" autocomplete="new-password" placeholder="توکن ربات؛ برای حفظ مقدار قبلی، خالی بگذارید">
+                                <label><input type="checkbox" name="clear_bot_token" value="1"> حذف مقدار ذخیره‌شده</label>
+                                <p class="description">توکن همین ربات را بدون فاصله وارد کنید؛ این مقدار برای ثبت وب‌هوک و ارسال پیام استفاده می‌شود.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="bot_secret">Secret وب‌هوک</label></th>
+                            <td>
+                                <input type="password" id="bot_secret" name="bot_secret" value="" dir="ltr" class="regular-text" maxlength="256" autocomplete="new-password" placeholder="Secret؛ برای حفظ مقدار قبلی، خالی بگذارید">
+                                <label><input type="checkbox" name="clear_bot_secret" value="1"> حذف مقدار ذخیره‌شده</label>
+                                <p class="description">یک مقدار تصادفی مستقل؛ ۶۴ نویسهٔ hex پیشنهاد می‌شود. پس از تغییر آن، وب‌هوک را دوباره ثبت کنید.</p>
+                            </td>
+                        </tr>
+                    </table>
+                    <button type="submit" class="button button-primary">ذخیرهٔ اعتبارنامه‌ها</button>
+                </form>
+                <p class="ab-notice ab-notice--warning"><strong>نکتهٔ امنیتی:</strong> مقدارهایی که در این فرم ذخیره می‌شوند در پایگاه‌دادهٔ WordPress نگه‌داری می‌شوند و رمزنگاری‌شده نیستند؛ نسخه‌های پشتیبان دیتابیس نیز ممکن است آن‌ها را داشته باشند. فقط مدیران سایت می‌توانند این فرم را تغییر دهند. Secretها را در گفتگو یا Git منتشر نکنید.</p>
+                <p class="ab-muted">برای تولید امن توکن API و Secret از دستگاه خود <code dir="ltr">openssl rand -hex 32</code> را جداگانه برای هر مقدار اجرا کنید.</p>
             </section>
 
             <section class="ab-card" aria-labelledby="ab-bot-title">
@@ -314,7 +356,7 @@ class AhangBan_Admin {
 
             <section class="ab-card" aria-labelledby="ab-webhook-title">
                 <div class="ab-card-heading"><div><span class="ab-step">۰۵</span><h2 id="ab-webhook-title">وب‌هوک تلگرام</h2></div><span class="ab-muted">بدون نیاز به اجرای دائمی Python</span></div>
-                <p>وب‌هوک پیام‌ها را روی همین WordPress دریافت می‌کند. برای تنظیم، هر سه متغیر <code>AHANGBAN_API_TOKEN</code>، <code>AHANGBAN_BOT_TOKEN</code> و <code>AHANGBAN_BOT_SECRET</code> باید در محیط PHP فعال باشند.</p>
+                <p>وب‌هوک پیام‌ها را روی همین WordPress دریافت می‌کند. برای ثبت وب‌هوک، توکن ربات و Secret وب‌هوک باید از محیط PHP یا اعتبارنامه‌های ذخیره‌شده در همین افزونه در دسترس باشند. API Token برای احراز هویت مسیرهای REST داده لازم است.</p>
                 <div class="ab-webhook-url"><code id="ab-webhook-url" dir="ltr"><?php echo esc_html( $webhook_url ); ?></code><button type="button" class="button button-small" data-ab-copy="ab-webhook-url">کپی نشانی</button><span class="screen-reader-text" aria-live="polite" data-ab-copy-status></span></div>
                 <div class="ab-actions">
                     <form method="post">

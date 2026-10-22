@@ -2,8 +2,8 @@
 /**
  * Plugin Name: AhangBan Connector — Telegram Bot API
  * Plugin URI:  https://ahangban.ir/
- * Description: لایهٔ امن اتصال ربات تلگرام به داده‌های واقعی آهنگ‌بان؛ با تنظیم اعتبارنامه‌ها از محیط PHP، جست‌وجوی فارسی و وب‌هوک داخلی.
- * Version:     1.5.1
+ * Description: اتصال ربات تلگرام به داده‌های واقعی آهنگ‌بان؛ اعتبارنامه‌ها از محیط PHP یا تنظیمات مدیر، جست‌وجوی فارسی و وب‌هوک داخلی.
+ * Version:     1.5.2
  * Author:      AhangBan — Engineering Team
  * License:     GPL v2 or later
  * Text Domain: ahangban-connector
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'AHANGBAN_CONNECTOR_VERSION', '1.5.1' );
+define( 'AHANGBAN_CONNECTOR_VERSION', '1.5.2' );
 define( 'AHANGBAN_CONNECTOR_FILE', __FILE__ );
 define( 'AHANGBAN_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AHANGBAN_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );

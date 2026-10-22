@@ -109,7 +109,7 @@ class AhangBan_Telegram {
             return new WP_Error( 'channel_unconfigured', 'ابتدا کانال را در پیشخوان WordPress → آهنگ‌بان API تنظیم کنید.', array( 'status' => 409 ) );
         }
         if ( '' === AhangBan_Settings::get_bot_token() ) {
-            return new WP_Error( 'bot_unconfigured', 'توکن ربات در محیط PHP هاست تنظیم نشده است.', array( 'status' => 409 ) );
+            return new WP_Error( 'bot_unconfigured', 'توکن ربات در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.', array( 'status' => 409 ) );
         }
 
         $song = AhangBan_Search::get_single( $post_id );
@@ -1573,7 +1573,7 @@ class AhangBan_Telegram {
             return;
         }
         if ( '' === AhangBan_Settings::get_bot_token() ) {
-            self::send( $chat, '❌ توکن ربات در محیط PHP هاست تنظیم نشده است.', self::admin_kb() );
+            self::send( $chat, '❌ توکن ربات در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.', self::admin_kb() );
             return;
         }
         set_transient( self::admin_state_key( $user_id ), array( 'action' => 'await_channel_publish_search' ), 10 * MINUTE_IN_SECONDS );

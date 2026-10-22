@@ -97,7 +97,7 @@
 
 ## امنیت
 
-- `AHANGBAN_API_TOKEN`, `AHANGBAN_BOT_TOKEN` و `AHANGBAN_BOT_SECRET` فقط از محیط PHP خوانده می‌شوند؛ نسخهٔ 1.5.0 در اولین اجرا گزینه‌های legacy آن‌ها را از `wp_options` حذف می‌کند.
+- متغیرهای محیطی PHP برای `AHANGBAN_API_TOKEN`، `AHANGBAN_BOT_TOKEN` و `AHANGBAN_BOT_SECRET` اولویت دارند؛ از v1.5.2 در نبودشان مدیر می‌تواند مقادیر را در `wp_options` ذخیره کند. گزینه‌ها autoload نمی‌شوند اما رمزنگاری نشده‌اند؛ دسترسی دیتابیس و backup باید محدود باشد.
 - Rate limit با شمارندهٔ اتمیِ fixed-window در همان جدول options وردپرس: ۶۰ درخواست/دقیقه/IP و ۲۰۰ درخواست/دقیقه/token؛ مقدار پیش‌فرض IP از `REMOTE_ADDR` است. فقط در صورت تعریف صریح `AHANGBAN_TRUSTED_PROXY_IPS` به هدرهای proxy اعتماد می‌شود.
 - CORS wildcard حذف شده است؛ Python سروربه‌سرور وصل می‌شود.
 - ورودی جست‌وجو تا ۱۰۰ نویسه و صفحه تا ۱۰۰۰ محدود است؛ پردازش UTF-8 بدون الزام `mbstring` انجام می‌شود.
@@ -114,7 +114,7 @@
 
 > هاست `etehadya` برای **اجرای پولینگ ۲۴/۷ مناسب نیست**. افزونه روی همین هاست نصب می‌شود؛ ربات روی VPS ارزان (مثلاً ۱vCPU/1GB) یا هر سرویس کانتینر خارج از ایران با systemd/Docker اجرا می‌شود.
 
-جایگزین اگر VPS ممکن نبود: **وب‌هوک روی همین هاست** با مسیر `/wp-json/ahangban/v1/telegram/webhook` + `X-Telegram-Bot-Api-Secret-Token` + HTTPS. این حالت به پشتیبانی PHP-FPM از environment variables و اجرای WP-Cron نیاز دارد.
+جایگزین اگر VPS ممکن نبود: **وب‌هوک روی همین هاست** با مسیر `/wp-json/ahangban/v1/telegram/webhook` + `X-Telegram-Bot-Api-Secret-Token` + HTTPS. اگر PHP/LSAPI env در دسترس نباشد، از فرم اعتبارنامه‌های افزونه استفاده می‌شود؛ اجرای WP-Cron برای صف‌ها لازم است.
 
 ---
 

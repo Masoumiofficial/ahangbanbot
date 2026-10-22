@@ -2,7 +2,7 @@
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 class AhangBan_Auth {
-    // Kept only so the one-time migration can remove the legacy database secret.
+    // Legacy-compatible WordPress option; environment remains the preferred source.
     const OPTION_TOKEN = 'ahangban_connector_token';
     const RATE_LIMIT_KEY = 'ahangban_rl_v2_';
     const RATE_LIMIT_MAX = 60; // per minute per verified client IP
@@ -11,9 +11,12 @@ class AhangBan_Auth {
 
     public static function init() {}
 
-    /** The API token is deliberately read from the PHP process environment only. */
+    /** Prefer the PHP environment; fall back to the administrator-managed legacy option. */
     public static function get_token() {
         $token = self::environment_value( 'AHANGBAN_API_TOKEN' );
+        if ( preg_match( '/^[a-f0-9]{64}$/i', $token ) ) { return $token; }
+
+        $token = trim( (string) get_option( self::OPTION_TOKEN, '' ) );
         return preg_match( '/^[a-f0-9]{64}$/i', $token ) ? $token : '';
     }
 
@@ -40,7 +43,7 @@ class AhangBan_Auth {
         }
         $expected = self::get_token();
         if ( '' === $expected ) {
-            return new WP_Error( 'ahangban_auth_not_configured', 'توکن API در محیط PHP پیکربندی نشده است.', array( 'status' => 503 ) );
+            return new WP_Error( 'ahangban_auth_not_configured', 'توکن API در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.', array( 'status' => 503 ) );
         }
         if ( ! hash_equals( $expected, $token ) ) {
             return new WP_Error( 'ahangban_forbidden', 'توکن نامعتبر.', array( 'status' => 403 ) );

@@ -2,11 +2,11 @@
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 /**
- * AhangBan Settings — non-secret bot and channel preferences.
- * Telegram/API credentials are read from the PHP process environment only.
+ * AhangBan Settings — bot/channel preferences and legacy-compatible credential storage.
+ * PHP environment values take precedence; administrator-entered credentials are a fallback.
  */
 class AhangBan_Settings {
-    // Legacy option names are retained only for the one-time secret cleanup.
+    // Keep the historical option names for administrator-managed credentials.
     const OPTION_BOT_TOKEN      = 'ahangban_bot_token';
     const OPTION_BOT_SECRET     = 'ahangban_bot_secret';
     const OPTION_ADMIN_IDS      = 'ahangban_admin_ids';
@@ -21,12 +21,13 @@ class AhangBan_Settings {
         self::migrate_legacy_secrets();
     }
 
-    /** Remove pre-1.5 credentials from wp_options exactly once; they are no longer read. */
+    /** Preserve historical credentials during upgrades and ensure they are not autoloaded. */
     private static function migrate_legacy_secrets() {
         if ( '1' === (string) get_option( self::OPTION_SECRET_MIGRATION, '0' ) ) { return; }
-        delete_option( self::OPTION_BOT_TOKEN );
-        delete_option( self::OPTION_BOT_SECRET );
-        delete_option( AhangBan_Auth::OPTION_TOKEN );
+        foreach ( array( self::OPTION_BOT_TOKEN, self::OPTION_BOT_SECRET, AhangBan_Auth::OPTION_TOKEN ) as $key ) {
+            $value = get_option( $key, '' );
+            if ( is_string( $value ) && '' !== $value ) { update_option( $key, $value, false ); }
+        }
         update_option( self::OPTION_SECRET_MIGRATION, '1', false );
     }
 
@@ -40,11 +41,17 @@ class AhangBan_Settings {
 
     public static function get_bot_token() {
         $token = self::environment_value( 'AHANGBAN_BOT_TOKEN' );
+        if ( true === self::validate_bot_token( $token ) && '' !== $token ) { return $token; }
+
+        $token = trim( (string) get_option( self::OPTION_BOT_TOKEN, '' ) );
         return true === self::validate_bot_token( $token ) ? $token : '';
     }
 
     public static function get_bot_secret() {
         $secret = self::environment_value( 'AHANGBAN_BOT_SECRET' );
+        if ( preg_match( '/^[A-Za-z0-9_-]{1,256}$/', $secret ) ) { return $secret; }
+
+        $secret = trim( (string) get_option( self::OPTION_BOT_SECRET, '' ) );
         return preg_match( '/^[A-Za-z0-9_-]{1,256}$/', $secret ) ? $secret : '';
     }
 
@@ -114,7 +121,7 @@ class AhangBan_Settings {
         $token = trim( (string) $token );
         if ( '' === $token ) { return true; }
         if ( ! preg_match( '/^\d{6,}:[A-Za-z0-9_-]{20,}$/', $token ) ) {
-            return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است. مقدار محیطی AHANGBAN_BOT_TOKEN را بررسی کنید.' );
+            return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است؛ توکن BotFather را بدون فاصله وارد کنید.' );
         }
         return true;
     }
@@ -131,10 +138,46 @@ class AhangBan_Settings {
         return true;
     }
 
-    /** Validate all non-secret settings first; a bad field never partially saves other fields. */
+    /** Validate all submitted settings first; a bad field never partially saves other fields. */
     public static function save( $data ) {
         $errors = array();
         $values = array();
+        $credential_values = array();
+        $credential_deletes = array();
+
+        if ( isset( $data['api_token'] ) ) {
+            $api_token = trim( (string) $data['api_token'] );
+            if ( '' !== $api_token && ! preg_match( '/^[a-f0-9]{64}$/i', $api_token ) ) {
+                $errors[] = 'توکن API باید دقیقاً ۶۴ نویسهٔ hex باشد.';
+            } elseif ( '' !== $api_token ) {
+                $credential_values[ AhangBan_Auth::OPTION_TOKEN ] = $api_token;
+            } elseif ( ! empty( $data['clear_api_token'] ) ) {
+                $credential_deletes[] = AhangBan_Auth::OPTION_TOKEN;
+            }
+        }
+
+        if ( isset( $data['bot_token'] ) ) {
+            $bot_token = trim( (string) $data['bot_token'] );
+            $valid = self::validate_bot_token( $bot_token );
+            if ( is_wp_error( $valid ) ) {
+                $errors[] = $valid->get_error_message();
+            } elseif ( '' !== $bot_token ) {
+                $credential_values[ self::OPTION_BOT_TOKEN ] = $bot_token;
+            } elseif ( ! empty( $data['clear_bot_token'] ) ) {
+                $credential_deletes[] = self::OPTION_BOT_TOKEN;
+            }
+        }
+
+        if ( isset( $data['bot_secret'] ) ) {
+            $bot_secret = trim( (string) $data['bot_secret'] );
+            if ( '' !== $bot_secret && ! preg_match( '/^[A-Za-z0-9_-]{1,256}$/', $bot_secret ) ) {
+                $errors[] = 'Secret وب‌هوک فقط می‌تواند شامل حروف انگلیسی، عدد، خط تیره و زیرخط باشد.';
+            } elseif ( '' !== $bot_secret ) {
+                $credential_values[ self::OPTION_BOT_SECRET ] = $bot_secret;
+            } elseif ( ! empty( $data['clear_bot_secret'] ) ) {
+                $credential_deletes[] = self::OPTION_BOT_SECRET;
+            }
+        }
 
         if ( isset( $data['admin_ids'] ) ) {
             $admin_ids = trim( (string) $data['admin_ids'] );
@@ -185,6 +228,8 @@ class AhangBan_Settings {
 
         if ( $errors ) { return $errors; }
         foreach ( $values as $key => $value ) { update_option( $key, $value, false ); }
+        foreach ( $credential_values as $key => $value ) { update_option( $key, $value, false ); }
+        foreach ( array_unique( $credential_deletes ) as $key ) { delete_option( $key ); }
         return array();
     }
 
