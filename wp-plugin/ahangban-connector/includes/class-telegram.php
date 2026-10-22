@@ -737,7 +737,8 @@ class AhangBan_Telegram {
         if ( '' === $token ) {
             return new WP_Error( 'no_token', 'توکن ربات تنظیم نشده.', array( 'status' => 400 ) );
         }
-        $resp = wp_safe_remote_get( 'https://api.telegram.org/bot' . $token . '/getWebhookInfo', array(
+        // This URL is pinned to Telegram; keep TLS verification and avoid false negatives from host-side URL/DNS validation.
+        $resp = wp_remote_get( 'https://api.telegram.org/bot' . $token . '/getWebhookInfo', array(
             'timeout' => 10,
             'redirection' => 0,
             'sslverify' => true,
@@ -851,8 +852,14 @@ class AhangBan_Telegram {
 
     // ---------- Telegram API helpers ----------
     private static function api_call( $method, $params = array(), $timeout = 12 ) {
-        $token = AhangBan_Settings::get_bot_token();
+        $token = trim( (string) AhangBan_Settings::get_bot_token() );
         if ( '' === $token ) { return new WP_Error( 'no_token', 'توکن تنظیم نشده' ); }
+        if ( ! preg_match( '/^\d{6,}:[A-Za-z0-9_-]{20,}$/', $token ) ) {
+            return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است.' );
+        }
+        if ( ! in_array( $method, array( 'sendMessage', 'sendChatAction', 'sendPhoto', 'sendAudio', 'sendVideo', 'sendDocument', 'answerCallbackQuery', 'editMessageText', 'editMessageCaption' ), true ) ) {
+            return new WP_Error( 'invalid_method', 'عملیات تلگرام نامعتبر است.' );
+        }
         $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
         $request_args = array(
             'timeout' => max( 5, (int) $timeout ),
@@ -862,7 +869,8 @@ class AhangBan_Telegram {
             'body'    => wp_json_encode( $params, JSON_UNESCAPED_UNICODE ),
         );
         // The Telegram token is embedded in the API path; never forward it through redirects.
-        $resp = wp_safe_remote_post( $url, $request_args );
+        // The HTTPS destination is fixed and token/method are validated, so normal HTTP avoids false rejection by wp_safe_remote_post().
+        $resp = wp_remote_post( $url, $request_args );
         if ( is_wp_error( $resp ) ) {
             $transport_error = str_replace( $token, '[redacted]', sanitize_text_field( $resp->get_error_message() ) );
             error_log( '[AhangBan Telegram] API transport failed for ' . sanitize_key( $method ) . ': ' . $transport_error );
@@ -875,7 +883,7 @@ class AhangBan_Telegram {
             $retry_after = (int) $json['parameters']['retry_after'];
             if ( $retry_after > 0 && $retry_after <= 3 ) {
                 sleep( $retry_after );
-                $resp = wp_safe_remote_post( $url, $request_args );
+                $resp = wp_remote_post( $url, $request_args );
                 if ( is_wp_error( $resp ) ) { return $resp; }
                 $code = (int) wp_remote_retrieve_response_code( $resp );
                 $json = json_decode( wp_remote_retrieve_body( $resp ), true );

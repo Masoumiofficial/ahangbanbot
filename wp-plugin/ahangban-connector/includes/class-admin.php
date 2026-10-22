@@ -57,12 +57,19 @@ class AhangBan_Admin {
     }
 
     private static function telegram_api( $token, $method, $params = array() ) {
+        $token = trim( (string) $token );
         if ( '' === $token ) { return new WP_Error( 'no_token', 'توکن ربات در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.' ); }
+        if ( ! preg_match( '/^\d{6,}:[A-Za-z0-9_-]{20,}$/', $token ) ) {
+            return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است؛ توکن BotFather را بدون فاصله وارد کنید.' );
+        }
         if ( ! in_array( $method, array( 'sendMessage', 'setWebhook', 'deleteWebhook', 'getMe', 'getWebhookInfo' ), true ) ) {
             return new WP_Error( 'invalid_method', 'عملیات تلگرام نامعتبر است.' );
         }
         $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
-        $response = wp_safe_remote_post( $url, array(
+        // The HTTPS host is fixed, the token and method are allowlisted, and redirects are disabled.
+        // wp_safe_remote_post() can reject this trusted URL during host-side DNS validation before
+        // any request is made; wp_remote_post() preserves TLS verification without that false negative.
+        $response = wp_remote_post( $url, array(
             'timeout' => 12,
             'redirection' => 0,
             'sslverify' => true,
