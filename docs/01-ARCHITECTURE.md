@@ -71,6 +71,8 @@
 ### انتشار دستی در کانال
 `POST /wp-json/ahangban/v1/channel/publish` با بدنهٔ JSON `{"post_id":123}` و Bearer token معتبر. فقط پست موسیقی با وضعیت `publish` پذیرفته می‌شود؛ مقصد کانال و Bot Token از تنظیمات/محیط WordPress گرفته می‌شوند. این عملیات از انتشار خودکار مستقل است و در خطای مبهم Telegram retry نمی‌شود.
 
+در v1.5.3، ارسال دستی و خودکار از یک caption builder استفاده می‌کنند: نام‌های واقعی `song`/`artist` وردپرس، هشتگ از taxonomy هنرمند، لینک رسمی و شناسهٔ کانال. دو دکمهٔ deep-link ربات و صفحهٔ سایت روی کارت و ویس هستند. پس از موفقیت کارت، WP-Cron یک Voice Note از ۶۰ ثانیهٔ اول `music128` (fallback به `music320`) می‌سازد و با `reply_to_message_id` به کارت وصل می‌کند. پردازش با `proc_open` و FFmpeg `libopus`، فایل موقت محدود و انتقال multipart امن انجام می‌شود؛ در نبود FFmpeg/Opus یا source، کارت اصلی می‌ماند ولی ویس ارسال نمی‌شود؛ هیچ‌گاه کل آهنگ به‌عنوان نمونه جایگزین نمی‌شود و پاسخ مبهم retry نمی‌شود.
+
 ### خواننده
 `GET /wp-json/ahangban/v1/artist/{slug_or_id}?page=1&per_page=5&sort=new` → پروفایل + آثار صفحه‌بندی
 

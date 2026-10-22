@@ -9,6 +9,8 @@ class AhangBan_Telegram {
     const NS = 'ahangban/v1';
     const SCHEMA_VERSION = '3';
     const MAX_MEDIA_BYTES = 51380224; // Conservative 49 MiB under Telegram Bot API upload limits.
+    const CHANNEL_PREVIEW_SECONDS = 60;
+    const CHANNEL_PREVIEW_STATUS_META = '_ahangban_tg_channel_preview_status';
     const BROADCAST_BATCH = 5;
 
     public static function init() {
@@ -18,6 +20,7 @@ class AhangBan_Telegram {
         // wp_after_insert_post runs after post metadata (including ACF musics_type/media fields) is saved.
         add_action( 'wp_after_insert_post', array( __CLASS__, 'queue_channel_announcement_after_insert' ), 10, 4 );
         add_action( 'ahangban_bot_send_channel_announcement', array( __CLASS__, 'send_channel_announcement' ), 10, 1 );
+        add_action( 'ahangban_bot_send_channel_preview', array( __CLASS__, 'process_channel_preview' ), 10, 3 );
     }
 
     /** Only classify verified music records; never broadcast an arbitrary WordPress post. */
@@ -50,7 +53,7 @@ class AhangBan_Telegram {
         }
     }
 
-    /** Publish a compact announcement with links back to the canonical post and bot deep link. */
+    /** Publish the channel card, then reply to it with a bounded voice-note preview. */
     public static function send_channel_announcement( $post_id ) {
         $post_id = (int) $post_id;
         if ( $post_id <= 0 || 'pending' !== (string) get_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', true ) ) { return; }
@@ -59,7 +62,7 @@ class AhangBan_Telegram {
             update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'cancelled' );
             return;
         }
-        $target = AhangBan_Settings::get_channel_target();
+        $target = AhangBan_Settings::normalize_channel_target( AhangBan_Settings::get_channel_target() );
         if ( ! AhangBan_Settings::is_channel_auto_post_enabled() || '' === $target || '' === AhangBan_Settings::get_bot_token() ) {
             update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'cancelled' );
             return;
@@ -76,10 +79,11 @@ class AhangBan_Telegram {
 
         if ( 'sent' === $photo_status['status'] ) {
             self::mark_channel_announcement_sent( $post_id, $photo_status['response'] );
+            self::queue_channel_preview( $post_id, $target, (int) ( $photo_status['response']['result']['message_id'] ?? 0 ) );
             return;
         }
         if ( 'unknown' === $photo_status['status'] ) {
-            // A timeout is ambiguous: Telegram may already have delivered the image. Do not retry and duplicate it.
+            // A timeout is ambiguous: Telegram may already have delivered the card. Do not retry and duplicate it.
             update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', 'unknown' );
             return;
         }
@@ -87,6 +91,7 @@ class AhangBan_Telegram {
         $response = self::send( $target, $caption, $keyboard );
         if ( self::telegram_ok( $response ) ) {
             self::mark_channel_announcement_sent( $post_id, $response );
+            self::queue_channel_preview( $post_id, $target, (int) ( $response['result']['message_id'] ?? 0 ) );
         } else {
             update_post_meta( $post_id, '_ahangban_tg_channel_announcement_status', is_wp_error( $response ) ? 'unknown' : 'failed' );
         }
@@ -117,7 +122,7 @@ class AhangBan_Telegram {
             return new WP_Error( 'post_not_found', 'اطلاعات این اثر برای انتشار در دسترس نیست.', array( 'status' => 404 ) );
         }
 
-        $caption = self::channel_caption( $song, 'انتشار از آرشیو آهنگ‌بان' );
+        $caption = self::channel_caption( $song );
         $keyboard = self::channel_keyboard( $song );
         $photo_status = self::send_card_photo( $target, $song, $caption, $keyboard );
         if ( 'unknown' === $photo_status['status'] ) {
@@ -139,11 +144,15 @@ class AhangBan_Telegram {
             return new WP_Error( 'telegram_send_failed', 'تلگرام پیام را نپذیرفت؛ دسترسی ربات به کانال و تنظیمات را بررسی کنید.', array( 'status' => 400 ) );
         }
 
+        $message_id = (int) ( $response['result']['message_id'] ?? 0 );
+        $preview_status = self::queue_channel_preview( $post_id, $target, $message_id );
         return array(
             'status' => 'sent',
             'post_id' => $post_id,
             'delivery' => $delivery,
-            'message_id' => (int) ( $response['result']['message_id'] ?? 0 ),
+            'message_id' => $message_id,
+            'preview_status' => $preview_status,
+            'preview_duration' => self::CHANNEL_PREVIEW_SECONDS,
         );
     }
 
@@ -153,15 +162,51 @@ class AhangBan_Telegram {
         if ( $message_id > 0 ) { update_post_meta( (int) $post_id, '_ahangban_tg_channel_message_id', $message_id ); }
     }
 
-    private static function channel_caption( $song, $heading = 'اثر تازه در آهنگ‌بان' ) {
-        $heading = self::esc( self::text_limit( $heading, 80 ) );
+    private static function channel_artist_names( $song ) {
+        $names = array();
+        if ( ! empty( $song['artists'] ) && is_array( $song['artists'] ) ) {
+            foreach ( $song['artists'] as $artist ) {
+                $name = is_array( $artist ) ? trim( wp_strip_all_tags( (string) ( $artist['name'] ?? '' ) ) ) : '';
+                if ( '' !== $name ) { $names[] = $name; }
+            }
+        }
+        if ( empty( $names ) && ! empty( $song['artist'] ) ) {
+            $name = trim( wp_strip_all_tags( (string) $song['artist'] ) );
+            if ( '' !== $name ) { $names[] = $name; }
+        }
+        return array_values( array_unique( $names ) );
+    }
+
+    private static function channel_artist_text( $song ) {
+        $artist = trim( wp_strip_all_tags( (string) ( $song['artist'] ?? '' ) ) );
+        if ( '' === $artist ) { $artist = implode( '، ', self::channel_artist_names( $song ) ); }
+        return self::text_limit( $artist, 100 );
+    }
+
+    /** Build Persian hashtags only from the real artist values returned by WordPress. */
+    private static function channel_artist_hashtags( $song ) {
+        $hashtags = array();
+        foreach ( self::channel_artist_names( $song ) as $name ) {
+            $tag = preg_replace( '/[\s\p{P}\p{S}\x{200c}\x{200d}]+/u', '_', trim( $name ) );
+            if ( ! is_string( $tag ) ) { continue; }
+            $tag = trim( preg_replace( '/_+/u', '_', $tag ), '_' );
+            if ( '' !== $tag ) { $hashtags[] = '#' . $tag; }
+        }
+        return implode( ' ', array_values( array_unique( $hashtags ) ) );
+    }
+
+    private static function channel_caption( $song ) {
         $title = self::esc( self::text_limit( $song['song'] ?? $song['title'] ?? 'آهنگ جدید', 100 ) );
-        $artist = self::esc( self::text_limit( $song['artist'] ?? '', 90 ) );
+        $artist = self::esc( self::channel_artist_text( $song ) );
+        $hashtags = self::channel_artist_hashtags( $song );
         $permalink = esc_url( $song['permalink'] ?? '', array( 'http', 'https' ) );
-        $caption = "🎶 <b>{$heading}</b>\n\n🎵 <b>{$title}</b>";
-        if ( '' !== $artist ) { $caption .= "\n👤 {$artist}"; }
-        if ( $permalink ) { $caption .= "\n🔗 <a href=\"{$permalink}\">مشاهدهٔ صفحهٔ رسمی</a>"; }
-        return self::text_limit( $caption, 850 );
+        $caption = '';
+        if ( '' !== $artist ) { $caption .= "🗣 {$artist}\n\n"; }
+        $caption .= "🎵 {$title}";
+        if ( '' !== $hashtags ) { $caption .= "\n\n🎤 {$hashtags}"; }
+        $caption .= "\n\n🔗 " . ( $permalink ? '<a href="' . $permalink . '">مشاهده صفحه رسمی</a>' : 'مشاهده صفحه رسمی' );
+        $caption .= "\n\n🆔️ @Ahangban_ir 💙";
+        return self::text_limit( $caption, 900 );
     }
 
     private static function channel_keyboard( $song ) {
@@ -191,6 +236,316 @@ class AhangBan_Telegram {
             if ( is_wp_error( $response ) ) { return array( 'status' => 'unknown', 'response' => $response ); }
         }
         return array( 'status' => $attempted ? 'rejected' : 'unavailable', 'response' => null );
+    }
+
+    /** Runtime capability probe used both by the admin status panel and before scheduling previews. */
+    public static function is_channel_preview_renderer_available() {
+        $cached = get_transient( 'ahangban_channel_preview_renderer' );
+        if ( 'yes' === $cached ) { return true; }
+        if ( 'no' === $cached ) { return false; }
+
+        $result = self::run_ffmpeg( array( '-hide_banner', '-encoders' ), 8 );
+        $output = is_array( $result ) ? (string) ( $result['stdout'] . $result['stderr'] ) : '';
+        $available = is_array( $result ) && 0 === (int) $result['exit_code'] && false !== strpos( $output, 'libopus' );
+        set_transient( 'ahangban_channel_preview_renderer', $available ? 'yes' : 'no', 10 * MINUTE_IN_SECONDS );
+        return $available;
+    }
+
+    private static function ffmpeg_binary() {
+        $binary = defined( 'AHANGBAN_FFMPEG_PATH' ) ? AHANGBAN_FFMPEG_PATH : 'ffmpeg';
+        if ( function_exists( 'apply_filters' ) ) { $binary = apply_filters( 'ahangban_ffmpeg_path', $binary ); }
+        if ( ! is_string( $binary ) ) { return ''; }
+        $binary = trim( $binary );
+        return '' === $binary || false !== strpos( $binary, "\0" ) ? '' : $binary;
+    }
+
+    /** Execute FFmpeg without a shell and with a strict wall-clock limit. */
+    private static function run_ffmpeg( $arguments, $timeout = 45 ) {
+        foreach ( array( 'proc_open', 'proc_get_status', 'proc_terminate', 'proc_close' ) as $function ) {
+            if ( ! function_exists( $function ) ) { return new WP_Error( 'proc_open_unavailable', 'اجرای امن پردازش صوتی در PHP در دسترس نیست.' ); }
+        }
+        $binary = self::ffmpeg_binary();
+        if ( '' === $binary ) { return new WP_Error( 'ffmpeg_unavailable', 'مسیر FFmpeg تنظیم نشده است.' ); }
+
+        $command = array_merge( array( $binary ), array_map( 'strval', (array) $arguments ) );
+        $descriptors = array( 0 => array( 'pipe', 'r' ), 1 => array( 'pipe', 'w' ), 2 => array( 'pipe', 'w' ) );
+        try {
+            $process = @proc_open( $command, $descriptors, $pipes );
+        } catch ( Throwable $e ) {
+            return new WP_Error( 'ffmpeg_unavailable', 'FFmpeg در محیط PHP قابل اجرا نیست.' );
+        }
+        if ( ! is_resource( $process ) ) { return new WP_Error( 'ffmpeg_unavailable', 'FFmpeg در محیط PHP قابل اجرا نیست.' ); }
+
+        if ( isset( $pipes[0] ) ) { fclose( $pipes[0] ); }
+        if ( isset( $pipes[1] ) ) { stream_set_blocking( $pipes[1], false ); }
+        if ( isset( $pipes[2] ) ) { stream_set_blocking( $pipes[2], false ); }
+        $stdout = '';
+        $stderr = '';
+        $exit_code = -1;
+        $timed_out = false;
+        $deadline = microtime( true ) + max( 1, (int) $timeout );
+
+        while ( true ) {
+            if ( isset( $pipes[1] ) ) {
+                $chunk = (string) stream_get_contents( $pipes[1] );
+                if ( strlen( $stdout ) < 1048576 ) { $stdout .= substr( $chunk, 0, 1048576 - strlen( $stdout ) ); }
+            }
+            if ( isset( $pipes[2] ) ) {
+                $chunk = (string) stream_get_contents( $pipes[2] );
+                if ( strlen( $stderr ) < 1048576 ) { $stderr .= substr( $chunk, 0, 1048576 - strlen( $stderr ) ); }
+            }
+            $status = proc_get_status( $process );
+            if ( empty( $status['running'] ) ) {
+                $exit_code = (int) ( $status['exitcode'] ?? -1 );
+                break;
+            }
+            if ( microtime( true ) >= $deadline ) {
+                $timed_out = true;
+                @proc_terminate( $process, 15 );
+                usleep( 100000 );
+                $status = proc_get_status( $process );
+                if ( ! empty( $status['running'] ) ) { @proc_terminate( $process, 9 ); }
+                break;
+            }
+            usleep( 100000 );
+        }
+
+        if ( isset( $pipes[1] ) && is_resource( $pipes[1] ) ) {
+            $chunk = (string) stream_get_contents( $pipes[1] );
+            if ( strlen( $stdout ) < 1048576 ) { $stdout .= substr( $chunk, 0, 1048576 - strlen( $stdout ) ); }
+            fclose( $pipes[1] );
+        }
+        if ( isset( $pipes[2] ) && is_resource( $pipes[2] ) ) {
+            $chunk = (string) stream_get_contents( $pipes[2] );
+            if ( strlen( $stderr ) < 1048576 ) { $stderr .= substr( $chunk, 0, 1048576 - strlen( $stderr ) ); }
+            fclose( $pipes[2] );
+        }
+        $close_code = proc_close( $process );
+        if ( $timed_out ) { return new WP_Error( 'ffmpeg_timeout', 'پردازش پیش‌نمایش صوتی از مهلت امن عبور کرد.' ); }
+        if ( $exit_code < 0 ) { $exit_code = (int) $close_code; }
+        return array( 'exit_code' => $exit_code, 'stdout' => $stdout, 'stderr' => $stderr );
+    }
+
+    private static function channel_preview_source_urls( $song ) {
+        $qualities = isset( $song['qualities'] ) && is_array( $song['qualities'] ) ? $song['qualities'] : array();
+        $sources = array();
+        foreach ( array( '128', '320' ) as $quality ) {
+            if ( ! empty( $qualities[ $quality ] ) ) { $sources[ $quality ] = (string) $qualities[ $quality ]; }
+        }
+        return $sources;
+    }
+
+    /** Download only a real WordPress audio URL, then trim/re-encode its first 60 seconds as OGG/Opus. */
+    private static function create_channel_voice_preview( $song ) {
+        if ( ! self::is_channel_preview_renderer_available() ) {
+            return new WP_Error( 'ffmpeg_unavailable', 'هاست باید FFmpeg با encoder libopus و proc_open فعال داشته باشد.' );
+        }
+        $sources = self::channel_preview_source_urls( $song );
+        if ( empty( $sources ) ) { return new WP_Error( 'preview_source_missing', 'فایل صوتی ۱۲۸ یا ۳۲۰ برای این اثر در WordPress پیدا نشد.' ); }
+
+        $download = null;
+        $last_error = null;
+        foreach ( $sources as $quality => $url ) {
+            $candidate = self::download_media_file( $url, $quality );
+            if ( is_wp_error( $candidate ) ) { $last_error = $candidate; continue; }
+            if ( 'sendAudio' !== ( $candidate['method'] ?? '' ) ) {
+                if ( ! empty( $candidate['path'] ) && file_exists( $candidate['path'] ) ) { @unlink( $candidate['path'] ); }
+                $last_error = new WP_Error( 'preview_not_audio', 'فایل منبعِ پیش‌نمایش یک فایل صوتی معتبر نیست.' );
+                continue;
+            }
+            $download = $candidate;
+            break;
+        }
+        if ( ! is_array( $download ) ) {
+            return $last_error instanceof WP_Error ? $last_error : new WP_Error( 'preview_download_failed', 'فایل صوتی منبع قابل دریافت نیست.' );
+        }
+
+        $output = wp_tempnam( 'ahangban-channel-preview.ogg' );
+        if ( ! $output ) {
+            if ( ! empty( $download['path'] ) && file_exists( $download['path'] ) ) { @unlink( $download['path'] ); }
+            return new WP_Error( 'preview_temp_failed', 'فضای موقت برای ساخت پیش‌نمایش در دسترس نیست.' );
+        }
+
+        $keep_output = false;
+        try {
+            $result = self::run_ffmpeg( array(
+                '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+                '-i', $download['path'],
+                '-t', (string) self::CHANNEL_PREVIEW_SECONDS,
+                '-map', '0:a:0', '-vn', '-map_metadata', '-1',
+                '-ac', '2', '-ar', '48000', '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
+                '-f', 'ogg', $output,
+            ), 45 );
+            if ( is_wp_error( $result ) ) { return $result; }
+            if ( 0 !== (int) $result['exit_code'] || ! file_exists( $output ) ) {
+                return new WP_Error( 'preview_encode_failed', 'FFmpeg نتوانست نمونهٔ صوتی OGG/Opus بسازد.' );
+            }
+            $size = (int) filesize( $output );
+            $header = file_get_contents( $output, false, null, 0, 2048 );
+            if ( $size <= 0 || $size > 8 * 1024 * 1024 || ! is_string( $header ) || 0 !== strpos( $header, 'OggS' ) || false === strpos( $header, 'OpusHead' ) ) {
+                return new WP_Error( 'preview_encode_invalid', 'فایل خروجی پیش‌نمایش قالب OGG/Opus معتبر ندارد.' );
+            }
+            $keep_output = true;
+            return array( 'path' => $output, 'size' => $size );
+        } catch ( Throwable $e ) {
+            return new WP_Error( 'preview_encode_failed', 'ساخت نمونهٔ صوتی با خطای داخلی متوقف شد.' );
+        } finally {
+            if ( ! empty( $download['path'] ) && file_exists( $download['path'] ) ) { @unlink( $download['path'] ); }
+            if ( ! $keep_output && file_exists( $output ) ) { @unlink( $output ); }
+        }
+    }
+
+    /** Queue manual previews so Telegram webhook/API requests do not wait on file conversion. */
+    private static function queue_channel_preview( $post_id, $chat_id, $message_id ) {
+        $post_id = (int) $post_id;
+        $message_id = (int) $message_id;
+        $chat_id = AhangBan_Settings::normalize_channel_target( $chat_id );
+        if ( $post_id <= 0 || $message_id <= 0 || '' === $chat_id ) {
+            if ( $post_id > 0 ) { update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' ); }
+            return 'failed';
+        }
+        $song = AhangBan_Search::get_single( $post_id );
+        if ( ! is_array( $song ) || empty( self::channel_preview_source_urls( $song ) ) ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'unavailable' );
+            error_log( '[AhangBan Telegram] Channel voice preview source unavailable for post ' . $post_id . '.' );
+            return 'unavailable';
+        }
+        if ( ! self::is_channel_preview_renderer_available() ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'unavailable' );
+            error_log( '[AhangBan Telegram] Channel voice preview unavailable for post ' . $post_id . ': FFmpeg/libopus or proc_open is not available.' );
+            return 'unavailable';
+        }
+
+        update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'queued' );
+        $args = array( $post_id, $chat_id, $message_id );
+        $scheduled = wp_schedule_single_event( time(), 'ahangban_bot_send_channel_preview', $args );
+        if ( is_wp_error( $scheduled ) || ( false === $scheduled && ! wp_next_scheduled( 'ahangban_bot_send_channel_preview', $args ) ) ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' );
+            error_log( '[AhangBan Telegram] Could not queue channel voice preview for post ' . $post_id . '.' );
+            return 'failed';
+        }
+        $doing_cron = function_exists( 'wp_doing_cron' ) ? wp_doing_cron() : ( defined( 'DOING_CRON' ) && DOING_CRON );
+        if ( ! $doing_cron && function_exists( 'spawn_cron' ) ) { spawn_cron(); }
+        return 'queued';
+    }
+
+    /** WP-Cron worker for a manually published card; the channel target is carried with the job. */
+    public static function process_channel_preview( $post_id, $chat_id, $message_id ) {
+        if ( function_exists( 'ignore_user_abort' ) ) { @ignore_user_abort( true ); }
+        if ( function_exists( 'set_time_limit' ) ) { @set_time_limit( 150 ); }
+        $post_id = (int) $post_id;
+        $message_id = (int) $message_id;
+        $chat_id = AhangBan_Settings::normalize_channel_target( $chat_id );
+        if ( $post_id <= 0 || $message_id <= 0 || '' === $chat_id ) {
+            if ( $post_id > 0 ) { update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' ); }
+            return;
+        }
+        $post = get_post( $post_id );
+        if ( ! $post || 'publish' !== $post->post_status || ! self::is_music_post( $post ) ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'cancelled' );
+            return;
+        }
+        $song = AhangBan_Search::get_single( $post_id );
+        if ( ! is_array( $song ) ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' );
+            return;
+        }
+        self::send_channel_preview_now( $post_id, $chat_id, $message_id, $song );
+    }
+
+    /** Build and send one reply only; ambiguous Telegram responses are recorded, never retried. */
+    private static function send_channel_preview_now( $post_id, $chat_id, $message_id, $song ) {
+        $post_id = (int) $post_id;
+        $message_id = (int) $message_id;
+        if ( $post_id <= 0 || $message_id <= 0 ) {
+            if ( $post_id > 0 ) { update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' ); }
+            return 'failed';
+        }
+        if ( ! self::is_channel_preview_renderer_available() ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'unavailable' );
+            error_log( '[AhangBan Telegram] Channel voice preview unavailable for post ' . $post_id . ': FFmpeg/libopus or proc_open is not available.' );
+            return 'unavailable';
+        }
+
+        $clip = self::create_channel_voice_preview( $song );
+        if ( is_wp_error( $clip ) ) {
+            $status = in_array( $clip->get_error_code(), array( 'ffmpeg_unavailable', 'proc_open_unavailable' ), true ) ? 'unavailable' : 'failed';
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, $status );
+            error_log( '[AhangBan Telegram] Channel voice preview ' . $status . ' for post ' . $post_id . ' (' . sanitize_key( $clip->get_error_code() ) . ').' );
+            return $status;
+        }
+
+        try {
+            $response = self::telegram_upload_voice_reply( $chat_id, $message_id, $clip, self::channel_keyboard( $song ) );
+        } finally {
+            if ( ! empty( $clip['path'] ) && file_exists( $clip['path'] ) ) { @unlink( $clip['path'] ); }
+        }
+        if ( self::telegram_ok( $response ) ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'sent' );
+            $voice_message_id = (int) ( $response['result']['message_id'] ?? 0 );
+            if ( $voice_message_id > 0 ) { update_post_meta( $post_id, '_ahangban_tg_channel_preview_message_id', $voice_message_id ); }
+            return 'sent';
+        }
+
+        if ( is_wp_error( $response ) ) {
+            $uncertain = in_array( $response->get_error_code(), array( 'telegram_voice_transport', 'telegram_voice_response', 'telegram_voice_ambiguous' ), true );
+            $status = $uncertain ? 'unknown' : 'failed';
+        } else {
+            $status = 'failed';
+        }
+        update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, $status );
+        error_log( '[AhangBan Telegram] Channel voice preview ' . $status . ' for post ' . $post_id . '.' );
+        return $status;
+    }
+
+    /** Upload the generated OGG/Opus clip as a Telegram voice note replying to the channel card. */
+    private static function telegram_upload_voice_reply( $chat_id, $reply_to_message_id, $file, $keyboard = null ) {
+        if ( ! function_exists( 'curl_init' ) || ! class_exists( 'CURLFile' ) ) {
+            return new WP_Error( 'curl_unavailable', 'افزونهٔ cURL هاست برای ارسال ویس فعال نیست.' );
+        }
+        $token = AhangBan_Settings::get_bot_token();
+        if ( '' === $token ) { return new WP_Error( 'no_token', 'توکن ربات تنظیم نشده است.' ); }
+        if ( empty( $file['path'] ) || ! file_exists( $file['path'] ) ) { return new WP_Error( 'voice_file_missing', 'فایل موقت ویس در دسترس نیست.' ); }
+
+        $fields = array(
+            'chat_id' => (string) $chat_id,
+            'voice' => new CURLFile( $file['path'], 'audio/ogg', 'ahangban-preview.ogg' ),
+            'reply_to_message_id' => (string) (int) $reply_to_message_id,
+        );
+        if ( is_array( $keyboard ) ) { $fields['reply_markup'] = wp_json_encode( $keyboard, JSON_UNESCAPED_UNICODE ); }
+        $handle = curl_init( 'https://api.telegram.org/bot' . $token . '/sendVoice' );
+        if ( false === $handle ) { return new WP_Error( 'telegram_voice_init', 'آغاز بارگذاری ویس در تلگرام ممکن نشد.' ); }
+        curl_setopt_array( $handle, array(
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $fields,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 8,
+            CURLOPT_TIMEOUT => 45,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ) );
+        if ( defined( 'CURLOPT_PROTOCOLS' ) && defined( 'CURLPROTO_HTTPS' ) ) { curl_setopt( $handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS ); }
+        $body = curl_exec( $handle );
+        $error = curl_error( $handle );
+        $code = (int) curl_getinfo( $handle, CURLINFO_HTTP_CODE );
+        curl_close( $handle );
+        if ( false === $body ) {
+            $safe_error = str_replace( $token, '[redacted]', sanitize_text_field( $error ) );
+            error_log( '[AhangBan Telegram] Voice upload transport failed: ' . $safe_error );
+            return new WP_Error( 'telegram_voice_transport', 'ارتباط امن برای ارسال ویس برقرار نشد؛ برای جلوگیری از تکرار، دوباره تلاش نشد.' );
+        }
+        $json = json_decode( $body, true );
+        if ( ! is_array( $json ) ) { return new WP_Error( 'telegram_voice_response', 'پاسخ ارسال ویس از تلگرام نامعتبر است.' ); }
+        if ( $code >= 400 || empty( $json['ok'] ) ) {
+            $description = str_replace( $token, '[redacted]', sanitize_text_field( $json['description'] ?? 'unknown error' ) );
+            error_log( '[AhangBan Telegram] Voice upload rejected (HTTP ' . $code . '): ' . $description );
+        }
+        if ( 429 === $code ) { return $json; } // Definitive rejection: do not retry this preview automatically.
+        if ( $code >= 500 || ( $code >= 300 && $code < 400 ) ) {
+            return new WP_Error( 'telegram_voice_ambiguous', 'پاسخ ارسال ویس نامطمئن بود؛ برای جلوگیری از ارسال تکراری دوباره بارگذاری نشد.' );
+        }
+        return $json;
     }
 
     private static function users_table() {
@@ -1651,7 +2006,7 @@ class AhangBan_Telegram {
                 array( 'text' => 'لغو', 'callback_data' => 'admin:channel_publish_cancel:' . $post_id ),
             ),
         ) );
-        $preview = "📣 <b>پیش‌نمایش انتشار در کانال</b>\n\n" . self::channel_caption( $song, 'انتشار از آرشیو آهنگ‌بان' ) . "\n\nاین ارسال مستقل از انتشار خودکار است؛ فقط با تأیید شما منتشر می‌شود.";
+        $preview = "📣 <b>پیش‌نمایش انتشار در کانال</b>\n\n" . self::channel_caption( $song ) . "\n\nاین ارسال مستقل از انتشار خودکار است؛ فقط با تأیید شما منتشر می‌شود. پس از انتشار، نمونهٔ ویس ۶۰ ثانیه‌ای در پاسخ به پست قرار می‌گیرد.";
         self::send( $chat, $preview, $keyboard );
     }
 
@@ -1678,6 +2033,13 @@ class AhangBan_Telegram {
         }
         $message = '✅ پست <code>' . (int) $post_id . '</code> در کانال منتشر شد.';
         if ( ! empty( $result['message_id'] ) ) { $message .= "\nشناسهٔ پیام کانال: <code>" . (int) $result['message_id'] . '</code>'; }
+        if ( 'queued' === ( $result['preview_status'] ?? '' ) ) {
+            $message .= "\n🎧 ویس ۶۰ ثانیه‌ای به صف WP-Cron افزوده شد و به‌صورت reply ارسال می‌شود.";
+        } elseif ( 'unavailable' === ( $result['preview_status'] ?? '' ) ) {
+            $message .= "\n⚠️ پست منتشر شد، اما FFmpeg/Opus یا اجرای proc_open روی هاست در دسترس نیست؛ ویس ارسال نشد.";
+        } elseif ( 'failed' === ( $result['preview_status'] ?? '' ) ) {
+            $message .= "\n⚠️ پست منتشر شد، اما صف ارسال ویس ساخته نشد؛ خود پست دوباره ارسال نشده است.";
+        }
         self::edit_text( $chat, $message_id, $message, self::admin_kb() );
     }
 

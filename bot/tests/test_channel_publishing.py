@@ -85,16 +85,20 @@ def test_song_card_has_publish_button_only_for_admins():
     assert "admin:channel_publish_prepare:731" in admin_callbacks
 
 
-def test_channel_publish_preview_escapes_post_content():
+def test_channel_publish_preview_uses_requested_layout_and_escapes_post_content():
     preview = _channel_publish_preview({
         "id": 12,
         "song": '<b>عنوان</b>',
         "artist": "A&B",
+        "artists": [{"name": "مهدی جهانی"}],
         "permalink": "https://example.org/song/12?a=1&b=2",
     })
     assert "&lt;b&gt;عنوان&lt;/b&gt;" in preview
     assert "A&amp;B" in preview
-    assert "&amp;b=2" in preview
+    assert "🎤 #مهدی_جهانی" in preview
+    assert 'href="https://example.org/song/12?a=1&amp;b=2"' in preview
+    assert "🔗 <a" in preview
+    assert "🆔️ @Ahangban_ir 💙" in preview
     assert "<b>عنوان</b>" not in preview
 
 
@@ -161,7 +165,13 @@ async def test_channel_publish_confirmation_is_consumed_before_sending():
     context = SimpleNamespace(user_data={
         "channel_publish_pending": {"post_id": 731, "created_at": time.time()},
     })
-    publish = AsyncMock(return_value={"status": "sent", "post_id": 731, "message_id": 99})
+    publish = AsyncMock(return_value={
+        "status": "sent",
+        "post_id": 731,
+        "message_id": 99,
+        "preview_status": "queued",
+        "preview_duration": 60,
+    })
     with patch("bot.handlers.admin.is_admin", return_value=True), patch(
         "bot.handlers.admin.api.publish_channel_post", new=publish
     ):
@@ -170,3 +180,4 @@ async def test_channel_publish_confirmation_is_consumed_before_sending():
     publish.assert_awaited_once_with(731)
     assert "channel_publish_pending" not in context.user_data
     assert any("در کانال منتشر شد" in text for text, _ in query.edits)
+    assert any("صف WP-Cron" in text for text, _ in query.edits)

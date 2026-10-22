@@ -240,6 +240,7 @@ class AhangBan_Admin {
         $bot_mode = AhangBan_Settings::get_mode();
         $channel_target = AhangBan_Settings::get_channel_target();
         $channel_auto_post = AhangBan_Settings::is_channel_auto_post_enabled();
+        $channel_preview_ready = AhangBan_Telegram::is_channel_preview_renderer_available();
         $taxonomy = AhangBan_Search::get_taxonomy();
         $taxonomy_exists = taxonomy_exists( $taxonomy );
         $legacy_singer = taxonomy_exists( 'singer' ) && 'singer' !== $taxonomy;
@@ -268,6 +269,7 @@ class AhangBan_Admin {
                     <div class="ab-status-item"><span>توکن ربات تلگرام</span><strong class="<?php echo $bot_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $bot_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
                     <div class="ab-status-item"><span>Secret وب‌هوک</span><strong class="<?php echo $secret_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $secret_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
                     <div class="ab-status-item"><span>نسخهٔ PHP / وردپرس</span><strong><?php echo esc_html( PHP_VERSION . ' / ' . get_bloginfo( 'version' ) ); ?></strong></div>
+                    <div class="ab-status-item"><span>تبدیل ویس کانال</span><strong class="<?php echo $channel_preview_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $channel_preview_ready ? 'FFmpeg + Opus آماده' : 'نیازمند بررسی هاست'; ?></strong></div>
                     <div class="ab-status-item"><span>تاکسونومی هنرمند</span><strong><?php echo $taxonomy_exists ? 'فعال · ' . esc_html( $taxonomy ) : 'ثبت نشده'; ?></strong></div>
                     <div class="ab-status-item"><span>هنرمندان / نوشته‌های منتشرشده</span><strong><?php echo esc_html( number_format_i18n( (int) $artist_count ) . ' / ' . number_format_i18n( $published_posts ) ); ?></strong></div>
                 </div>
@@ -327,7 +329,7 @@ class AhangBan_Admin {
                     <input type="hidden" name="ahangban_action" value="save_bot">
                     <table class="form-table" role="presentation">
                         <tr><th scope="row"><label for="admin_ids">شناسهٔ ادمین‌های تلگرام</label></th><td><input type="text" id="admin_ids" name="admin_ids" value="<?php echo esc_attr( $admin_ids ); ?>" dir="ltr" class="regular-text" placeholder="123456789, 987654321"><p class="description">با کاما جدا کنید. برای یافتن شناسه می‌توانید از <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer">@userinfobot</a> کمک بگیرید.</p></td></tr>
-                        <tr><th scope="row"><label for="bot_username">یوزرنیم ربات</label></th><td><input type="text" id="bot_username" name="bot_username" value="<?php echo esc_attr( $bot_username ); ?>" dir="ltr" class="regular-text" placeholder="ahangbanbot"><p class="description">اختیاری؛ برای ساخت لینک deep-link از کانال.</p></td></tr>
+                        <tr><th scope="row"><label for="bot_username">یوزرنیم ربات</label></th><td><input type="text" id="bot_username" name="bot_username" value="<?php echo esc_attr( $bot_username ); ?>" dir="ltr" class="regular-text" placeholder="ahangbanbot"><p class="description">برای نمایش دکمهٔ «مشاهده و دریافت در ربات» روی پست کانال و ویس، یوزرنیم عمومی ربات را ثبت کنید.</p></td></tr>
                         <tr><th scope="row">حالت اجرا</th><td><label><input type="radio" name="bot_mode" value="webhook" <?php checked( $bot_mode, 'webhook' ); ?>> وب‌هوک WordPress</label><br><label><input type="radio" name="bot_mode" value="polling" <?php checked( $bot_mode, 'polling' ); ?>> Python polling روی VPS جدا</label><p class="description">در حالت polling، ثبت وب‌هوک از همین صفحه غیرفعال می‌شود. سرویس Python را جداگانه اجرا کنید و اگر وب‌هوک قبلی ثبت است، پیش از polling آن را حذف کنید.</p></td></tr>
                     </table>
                     <button type="submit" class="button button-primary">ذخیرهٔ تنظیمات غیرحساس</button>
@@ -337,6 +339,7 @@ class AhangBan_Admin {
             <section class="ab-card" aria-labelledby="ab-channel-title">
                 <div class="ab-card-heading"><div><span class="ab-step">۰۴</span><h2 id="ab-channel-title">اتصال کانال تلگرام</h2></div><span class="ab-badge <?php echo $channel_auto_post ? 'ab-badge--on' : 'ab-badge--off'; ?>">انتشار خودکار <?php echo $channel_auto_post ? 'روشن' : 'خاموش'; ?></span></div>
                 <p>فقط آهنگ/آلبوم/ویدیوی موسیقیِ تازه و قابل‌تشخیص از داده‌های واقعی وردپرس در صف WP-Cron قرار می‌گیرد. نوشته‌های معمولی و محتوای قدیمی بازنشر نمی‌شوند.</p>
+                <p class="ab-notice ab-notice--warning">نمونهٔ ۶۰ ثانیه‌ای به‌صورت ویسِ reply پس از پست می‌آید؛ ساخت آن به FFmpeg دارای libopus و فعال‌بودن <code>proc_open</code> در PHP نیاز دارد. اگر وضعیت بالا آماده نباشد، پست اصلی همچنان منتشر می‌شود اما ویس ارسال نمی‌شود. WP-Cron نیز باید اجرا شود.</p>
                 <form method="post" class="ab-form-block">
                     <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
                     <input type="hidden" name="ahangban_action" value="save_channel">

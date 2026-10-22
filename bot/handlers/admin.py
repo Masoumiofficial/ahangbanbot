@@ -1,7 +1,9 @@
 import asyncio
 import html
 import logging
+import re
 import time
+import unicodedata
 
 import aiosqlite
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -66,19 +68,67 @@ def _channel_publish_markup(post_id: int) -> InlineKeyboardMarkup:
     ])
 
 
+def _clean_channel_artist(value) -> str:
+    return " ".join(re.sub(r"<[^>]*>", "", str(value or "")).split())
+
+
+def _channel_artist_names(song: dict) -> list[str]:
+    names = []
+    for artist in song.get("artists") or []:
+        if isinstance(artist, dict):
+            name = _clean_channel_artist(artist.get("name"))
+            if name:
+                names.append(name)
+    if not names:
+        name = _clean_channel_artist(song.get("artist"))
+        if name:
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _channel_artist_hashtags(song: dict) -> str:
+    tags = []
+    for name in _channel_artist_names(song):
+        pieces = []
+        separator = False
+        for char in name.strip():
+            category = unicodedata.category(char)
+            if char.isspace() or char in "\u200c\u200d" or category.startswith(("P", "S")):
+                if pieces and not separator:
+                    pieces.append("_")
+                separator = True
+            else:
+                pieces.append(char)
+                separator = False
+        tag = "".join(pieces).strip("_")
+        if tag:
+            tags.append("#" + tag)
+    return " ".join(dict.fromkeys(tags))
+
+
 def _channel_publish_preview(song: dict) -> str:
     post_id = int(song.get("id") or 0)
     title = html.escape(str(song.get("song") or song.get("title") or f"اثر #{post_id}")[:180])
-    artist = html.escape(str(song.get("artist") or "")[:140])
+    artist_text = _clean_channel_artist(song.get("artist")) or "، ".join(_channel_artist_names(song))
+    artist = html.escape(artist_text[:140])
+    hashtags = _channel_artist_hashtags(song)
     permalink = str(song.get("permalink") or "").strip()
-    lines = ["📣 <b>پیش‌نمایش انتشار در کانال</b>", "", f"🎵 <b>{title}</b>"]
+    lines = ["📣 <b>پیش‌نمایش انتشار در کانال</b>", ""]
     if artist:
-        lines.append(f"👤 {artist}")
+        lines.extend([f"🗣 {artist}", ""])
+    lines.append(f"🎵 {title}")
+    if hashtags:
+        lines.extend(["", f"🎤 {hashtags}"])
     if permalink.startswith(("https://", "http://")):
-        lines.append(f"🔗 {html.escape(permalink, quote=True)}")
+        lines.extend(["", f'🔗 <a href="{html.escape(permalink, quote=True)}">مشاهده صفحه رسمی</a>'])
+    else:
+        lines.extend(["", "🔗 مشاهده صفحه رسمی"])
     lines.extend([
         "",
+        "🆔️ @Ahangban_ir 💙",
+        "",
         f"شناسهٔ پست: <code>{post_id}</code>",
+        "پس از انتشار، ویس ۶۰ ثانیه‌ای OGG/Opus با دو دکمهٔ شیشه‌ای به‌صورت reply می‌آید؛ ارسال به WP-Cron وابسته است.",
         "این ارسال به کانال تنظیم‌شده در WordPress می‌رود و به روشن‌بودن انتشار خودکار وابسته نیست.",
     ])
     return "\n".join(lines)
@@ -210,6 +260,13 @@ async def admin_channel_publish_confirm_callback(update: Update, context: Contex
         message = f"✅ پست <code>{post_id}</code> در کانال منتشر شد."
         if message_id > 0:
             message += f"\nشناسهٔ پیام کانال: <code>{message_id}</code>"
+        preview_status = result.get("preview_status")
+        if preview_status == "queued":
+            message += "\n🎧 ویس ۶۰ ثانیه‌ای به صف WP-Cron افزوده شد و به‌صورت reply ارسال می‌شود."
+        elif preview_status == "unavailable":
+            message += "\n⚠️ پست منتشر شد، اما FFmpeg/Opus یا اجرای proc_open روی هاست در دسترس نیست؛ ویس ارسال نشد."
+        elif preview_status == "failed":
+            message += "\n⚠️ پست منتشر شد، اما صف ارسال ویس ساخته نشد؛ خود پست دوباره ارسال نشده است."
     except APIError as exc:
         if exc.status == 0 or exc.status >= 500:
             message = (
