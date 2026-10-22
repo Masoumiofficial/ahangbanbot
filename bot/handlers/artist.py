@@ -1,15 +1,25 @@
-import math
-import logging
-import uuid
+import asyncio
 import html
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
+import logging
+import math
+import uuid
 
-from ..api_client import api, APIError
-from ..db import increment_stat
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes
+
+from ..api_client import APIError, api
+from ..db import (
+    count_artist_followers,
+    increment_stat,
+    is_artist_followed,
+    list_artist_follows_page,
+    remove_artist_follow,
+    toggle_artist_follow,
+)
 from ..utils.formatters import artist_caption, song_list_item
 from ..utils.keyboards import artist_card, artists_list_pagination
+from .song import _send_card_photo
 
 log = logging.getLogger("ahangban.artist")
 
@@ -50,13 +60,19 @@ async def artists_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.callback_query.answer()
         await update.callback_query.edit_message_text("⏳ در حال بارگذاری خوانندگان…")
         chat = update.callback_query.message.chat
-        send_fn = lambda text, **kw: update.callback_query.edit_message_text(text, **kw)
+
+        async def send_fn(text, **kwargs):
+            return await update.callback_query.edit_message_text(text, **kwargs)
     else:
         chat = update.effective_chat
-        send_fn = lambda text, **kw: update.message.reply_text(text, **kw)
+
+        async def send_fn(text, **kwargs):
+            return await update.message.reply_text(text, **kwargs)
         if chat:
-            try: await chat.send_action("typing")
-            except: pass
+            try:
+                await chat.send_action("typing")
+            except Exception:
+                log.debug("could not send typing action for artist list")
 
     try:
         data_resp = await api.artists(q=q, letter=letter, sort="name", page=page, per_page=PER_PAGE_ARTISTS)
@@ -139,8 +155,10 @@ async def artist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sort = "new"
     elif len(parts) == 4:
         identifier = parts[1]
-        try: page = int(parts[2])
-        except: page = 1
+        try:
+            page = int(parts[2])
+        except (TypeError, ValueError):
+            page = 1
         sort = parts[3] if parts[3] in ("new", "old", "title") else "new"
     else:
         return
@@ -163,8 +181,10 @@ async def show_artist(update_or_query, context, identifier: str, page: int = 1, 
         edit_mode = True
 
     if chat:
-        try: await chat.send_action("typing")
-        except: pass
+        try:
+            await chat.send_action("typing")
+        except Exception:
+            log.debug("could not send typing action for artist detail")
 
     try:
         data = await api.artist(identifier, page=page, per_page=PER_PAGE_SONGS, sort=sort)
@@ -208,39 +228,240 @@ async def show_artist(update_or_query, context, identifier: str, page: int = 1, 
         title = (song.get("song") or song.get("title") or str(sid))[:30]
         keyboard.append([InlineKeyboardButton(f"🎵 {title}", callback_data=f"song:{sid}")])
 
-    # Artist pagination + sort
-    term_kb = artist_card(term, page, total_pages, sort)
+    # Cache the real WordPress term ID/name for a quick follow toggle from this card.
+    raw_term_id = term.get("term_id")
+    term_id = int(raw_term_id) if str(raw_term_id or "").isdigit() and int(raw_term_id) > 0 else 0
+    actor = cq.from_user if cq else getattr(update_or_query, "effective_user", None)
+    if term_id:
+        names = context.user_data.setdefault("artist_names", {})
+        names[str(term_id)] = str(term.get("name") or "")[:250]
+        while len(names) > 30:
+            names.pop(next(iter(names)))
+        follower_count = await count_artist_followers(term_id)
+        followed = await is_artist_followed(actor.id, term_id) if actor else False
+    else:
+        follower_count = 0
+        followed = False
+
+    # Artist pagination, sort, and follow state.
+    term_kb = artist_card(term, page, total_pages, sort, is_followed=followed, follower_count=follower_count)
     # Merge
     all_buttons = keyboard + term_kb.inline_keyboard
 
-    cover = term.get("image")
+    markup = InlineKeyboardMarkup(all_buttons)
 
-    try:
-        if edit_mode and cq:
-            # If cover, send photo as new message (can't edit photo)
-            if cover and page == 1:
-                await cq.message.reply_photo(photo=cover, caption=caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-                # Also edit old to simple text to avoid duplicate
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-            else:
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
+    if edit_mode and cq:
+        # Keep a photo card in place when Telegram's 1024-character caption limit allows it.
+        if getattr(cq.message, "photo", None):
+            if len(caption) <= 1000:
+                try:
+                    await cq.edit_message_caption(caption=caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+                    return
+                except Exception as exc:
+                    if "message is not modified" in str(exc).lower():
+                        return
+                    log.warning("editing artist photo caption failed; switching to text card: %s", exc)
+            # Text pages have a larger limit; replace the photo rather than trying editMessageText on media.
+            try:
+                await cq.message.delete()
+            except Exception:
+                pass
+            try:
+                await cq.message.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+            except Exception as exc:
+                log.warning("sending paginated artist text card failed: %s", exc)
         else:
-            msg_target = update_or_query.message if hasattr(update_or_query, "message") else cq.message
-            if cover:
-                await msg_target.reply_photo(photo=cover, caption=caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
+            photo_status = await _send_card_photo(cq.message, term, caption, markup) if (term.get("image") or term.get("image_fallback")) else "missing"
+            if "sent" == photo_status:
+                try:
+                    await cq.message.delete()
+                except Exception:
+                    try:
+                        await cq.edit_message_text("✅ صفحهٔ کامل خواننده در پیام بعدی است.")
+                    except Exception:
+                        pass
+            elif "unknown" == photo_status:
+                pass  # Avoid a second send when Telegram's response timed out ambiguously.
             else:
-                await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-    except Exception as e:
-        log.warning("show artist failed: %s", e)
-        try:
-            if cq and edit_mode:
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-            else:
-                await update_or_query.message.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
-        except Exception:
-            pass
+                try:
+                    await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+                except Exception as exc:
+                    log.warning("editing artist card failed: %s", exc)
+    else:
+        msg_target = update_or_query.message if hasattr(update_or_query, "message") else update_or_query
+        photo_status = await _send_card_photo(msg_target, term, caption, markup) if (term.get("image") or term.get("image_fallback")) else "missing"
+        if "missing" == photo_status or "rejected" == photo_status:
+            try:
+                await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=markup)
+            except Exception as exc:
+                log.warning("sending text-only artist card failed: %s", exc)
 
     await increment_stat("artist_views")
+
+async def artist_follow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    try:
+        _, term_id_text, page_text, sort = query.data.split(":", 3)
+        term_id = int(term_id_text)
+        page = max(1, int(page_text))
+    except (AttributeError, ValueError):
+        await query.answer("درخواست دنبال‌کردن نامعتبر است.", show_alert=True)
+        return
+    if term_id <= 0 or sort not in ("new", "old", "title"):
+        await query.answer("شناسهٔ هنرمند نامعتبر است.", show_alert=True)
+        return
+    if not user:
+        await query.answer("حساب کاربری در دسترس نیست.", show_alert=True)
+        return
+    await query.answer("در حال ثبت دنبال‌کردن…")
+
+    artist_names = context.user_data.get("artist_names", {})
+    artist_name = str(artist_names.get(str(term_id), "")) if isinstance(artist_names, dict) else ""
+    if not artist_name:
+        try:
+            artist_data = await api.artist(term_id, page=1, per_page=1, sort="new")
+            artist_name = str((artist_data.get("term") or {}).get("name") or "")[:250]
+        except Exception:
+            log.exception("could not load artist name for follow %s", term_id)
+            if query.message:
+                await query.message.reply_text("❌ اطلاعات هنرمند در دسترس نیست؛ کارت را دوباره از فهرست خوانندگان باز کنید.")
+            return
+
+    try:
+        followed, followers = await toggle_artist_follow(user.id, term_id, artist_name)
+    except Exception:
+        log.exception("could not toggle artist follow for user %s", user.id)
+        if query.message:
+            await query.message.reply_text("❌ ثبت دنبال‌کردن انجام نشد؛ کمی بعد دوباره تلاش کنید.")
+        return
+
+    markup = getattr(query.message, "reply_markup", None) if query.message else None
+    rows = []
+    replaced = False
+    if markup:
+        for row in markup.inline_keyboard:
+            new_row = []
+            for button in row:
+                data = getattr(button, "callback_data", None)
+                if data and data.startswith(f"artist_follow:{term_id}:"):
+                    label = "✅ دنبال‌شده" if followed else "➕ دنبال‌کردن"
+                    if followers > 0:
+                        label += f" · {followers}"
+                    button = InlineKeyboardButton(label, callback_data=f"artist_follow:{term_id}:{page}:{sort}")
+                    replaced = True
+                new_row.append(button)
+            rows.append(new_row)
+    if replaced:
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(rows))
+        except Exception as exc:
+            log.info("artist follow saved but card markup could not be refreshed: %s", type(exc).__name__)
+            if query.message:
+                await query.message.reply_text("✅ وضعیت دنبال‌کردن هنرمند ذخیره شد؛ کارت را دوباره باز کنید تا به‌روز شود.")
+
+
+async def _send_artist_follows_page(target, user_id: int, page: int = 1, *, edit: bool = False):
+    data = await list_artist_follows_page(user_id, page=page, per_page=8)
+    total = int(data["total"])
+    total_pages = max(1, (total + data["per_page"] - 1) // data["per_page"])
+    page = min(max(1, int(page)), total_pages)
+    if page != data["page"]:
+        data = await list_artist_follows_page(user_id, page=page, per_page=8)
+
+    lines = [f"🔔 <b>هنرمندان دنبال‌شدهٔ شما</b> — {total:,} هنرمند".replace(",", "٬")]
+    keyboard = []
+    if data["results"]:
+        lines.append(f"صفحهٔ {page} از {total_pages}:\n")
+        valid_items = [item for item in data["results"] if int(item.get("term_id") or 0) > 0]
+        semaphore = asyncio.Semaphore(4)
+
+        async def load_current_artist(term_id: int):
+            try:
+                async with semaphore:
+                    artist_data = await api.artist(term_id, page=1, per_page=1, sort="new")
+                name = str((artist_data.get("term") or {}).get("name") or "").strip()
+                return name, "ok" if name else "missing"
+            except APIError as exc:
+                return "", "missing" if exc.status == 404 else "unavailable"
+            except Exception:
+                log.info("could not refresh followed artist %s from WordPress", term_id)
+                return "", "unavailable"
+
+        term_ids = [int(item["term_id"]) for item in valid_items]
+        current_artists = await asyncio.gather(*(load_current_artist(term_id) for term_id in term_ids))
+        for item, (current_name, status) in zip(valid_items, current_artists):
+            term_id = int(item["term_id"])
+            name = current_name or f"هنرمند #{term_id}"
+            status_note = " — دیگر در سایت موجود نیست" if status == "missing" else " — اطلاعات سایت فعلاً در دسترس نیست" if status == "unavailable" else ""
+            lines.append(f"• <b>{html.escape(name[:100])}</b>{html.escape(status_note)}")
+            keyboard.append([
+                InlineKeyboardButton(f"🎤 {name[:44]}", callback_data=f"artist:{term_id}"),
+                InlineKeyboardButton("🔕 لغو", callback_data=f"artist_unfollow:{term_id}:{page}"),
+            ])
+    else:
+        lines.append("\nهنوز هنرمندی را دنبال نمی‌کنید. از کارت هنرمند روی «➕ دنبال‌کردن» بزنید.")
+
+    navigation = []
+    if page > 1:
+        navigation.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"artist_follows:page:{page - 1}"))
+    if total_pages > 1:
+        navigation.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        navigation.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"artist_follows:page:{page + 1}"))
+    if navigation:
+        keyboard.append(navigation)
+    keyboard.append([InlineKeyboardButton("🎤 فهرست خوانندگان", callback_data="artists:page:1")])
+    keyboard.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
+
+    method = target.edit_text if edit else target.reply_text
+    await method("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def artist_follows_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and update.effective_message:
+        await _send_artist_follows_page(update.effective_message, user.id)
+
+
+async def artist_follows_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    if not user:
+        await query.answer("حساب کاربری در دسترس نیست.", show_alert=True)
+        return
+    try:
+        page = max(1, int(query.data.rsplit(":", 1)[1]))
+    except (AttributeError, ValueError):
+        page = 1
+    await query.answer()
+    if query.message:
+        await _send_artist_follows_page(query.message, user.id, page, edit=True)
+
+
+async def artist_unfollow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    try:
+        _, term_id_text, page_text = query.data.split(":", 2)
+        term_id = int(term_id_text)
+        page = max(1, int(page_text))
+    except (AttributeError, ValueError):
+        await query.answer("درخواست نامعتبر است.", show_alert=True)
+        return
+    if not user or term_id <= 0:
+        await query.answer("حساب یا شناسهٔ هنرمند نامعتبر است.", show_alert=True)
+        return
+    try:
+        removed = await remove_artist_follow(user.id, term_id)
+    except Exception:
+        log.exception("could not remove artist follow for user %s", user.id)
+        await query.answer("لغو دنبال‌کردن انجام نشد.", show_alert=True)
+        return
+    await query.answer("دنبال‌کردن لغو شد." if removed else "این هنرمند در فهرست نبود.")
+    if query.message:
+        await _send_artist_follows_page(query.message, user.id, page, edit=True)
+
 
 async def artist_text_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -250,10 +471,19 @@ async def artist_text_search(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = update.message.text.strip()
     try:
         data = await api.artists(q=text, page=1, per_page=PER_PAGE_ARTISTS)
+    except APIError as exc:
+        await update.message.reply_text(f"❌ جست‌وجوی خواننده انجام نشد: {exc.message}")
+        return
     except Exception:
+        log.exception("artist text search failed")
+        await update.message.reply_text("❌ ارتباط با سایت برقرار نشد؛ کمی بعد دوباره امتحان کنید.")
         return
     results = data.get("results") or []
     if not results:
+        await update.message.reply_text(
+            f"😕 خواننده‌ای با نام «{text[:100]}» پیدا نشد. از فهرست الفبایی هم می‌توانید کمک بگیرید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎤 فهرست خوانندگان", callback_data="artists:page:1")], [InlineKeyboardButton("🏠 خانه", callback_data="home")]]),
+        )
         return
     # Show as quick list
     keyboard = []

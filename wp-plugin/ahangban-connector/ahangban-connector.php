@@ -2,8 +2,8 @@
 /**
  * Plugin Name: AhangBan Connector — Telegram Bot API
  * Plugin URI:  https://ahangban.ir/
- * Description: لایهٔ امن اتصال ربات تلگرام به داده‌های واقعی آهنگ‌بان. هیچ تغییری در قالب ایجاد نمی‌کند. از نسخه 1.3.0 ارسال رسانه با بارگذاری امن فایل، پنل مدیریت تلگرام و وب‌هوک سازگار با PHP 7.4 پشتیبانی می‌شود.
- * Version:     1.3.0
+ * Description: اتصال ربات تلگرام به داده‌های واقعی آهنگ‌بان؛ وب‌هوک داخلی، تنظیمات قابل‌کنترل و تشخیص امن خطاهای Telegram.
+ * Version:     1.6.2
  * Author:      AhangBan — Engineering Team
  * License:     GPL v2 or later
  * Text Domain: ahangban-connector
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'AHANGBAN_CONNECTOR_VERSION', '1.3.0' );
+define( 'AHANGBAN_CONNECTOR_VERSION', '1.6.2' );
 define( 'AHANGBAN_CONNECTOR_FILE', __FILE__ );
 define( 'AHANGBAN_CONNECTOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'AHANGBAN_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
@@ -37,24 +37,4 @@ add_action( 'plugins_loaded', function () {
     if ( is_admin() ) {
         AhangBan_Admin::init();
     }
-} );
-
-register_activation_hook( __FILE__, function () {
-    // Generate token if not exists
-    if ( ! get_option( 'ahangban_connector_token' ) ) {
-        $token = bin2hex( random_bytes( 32 ) ); // 64 hex chars
-        add_option( 'ahangban_connector_token', $token, '', 'no' );
-        // autoload=no for security
-        update_option( 'ahangban_connector_token', $token );
-        // Ensure not autoloaded (WP 6+ supports add with autoload param)
-        if ( function_exists( 'wp_set_option_autoload' ) ) {
-            // no-op, already handled
-        }
-    }
-    // Flush rewrite for REST (not strictly needed but safe)
-    flush_rewrite_rules( false );
-} );
-
-register_deactivation_hook( __FILE__, function () {
-    flush_rewrite_rules( false );
 } );

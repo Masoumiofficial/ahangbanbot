@@ -10,14 +10,23 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
-from telegram.constants import ParseMode
 
-from ..api_client import api, APIError
-from ..db import increment_stat, get_file_id, set_file_id
-from ..utils.formatters import song_caption, lyrics_text
+from ..api_client import APIError, api
+from ..config import is_admin
+from ..db import (
+    favorite_state,
+    get_file_id,
+    increment_stat,
+    list_favorites_page,
+    remove_favorite,
+    set_file_id,
+    toggle_favorite,
+)
+from ..utils.formatters import lyrics_text, song_caption
 from ..utils.keyboards import song_card
 
 log = logging.getLogger("ahangban.song")
@@ -111,6 +120,37 @@ def _file_id_from_message(message):
             return item
     return None
 
+
+async def _send_card_photo(message, item: dict, caption: str, keyboard):
+    """Send a large cover first, use the WordPress medium fallback only on a definite rejection."""
+    candidates = []
+    for value in (item.get("cover") or item.get("image"), item.get("cover_fallback") or item.get("image_fallback")):
+        url = str(value or "").strip()
+        if url and url not in candidates and await asyncio.to_thread(_is_public_https_url, url):
+            candidates.append(url)
+
+    if not candidates:
+        return "missing"
+    for url in candidates:
+        try:
+            await message.reply_photo(
+                photo=url,
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+            return "sent"
+        except BadRequest as exc:
+            # BadRequest is a definitive rejection (e.g. large image exceeds Telegram's limit),
+            # so trying the lower-resolution WordPress variant cannot create a duplicate.
+            log.info("Telegram rejected cover variant; trying fallback: %s", exc)
+        except Exception as exc:
+            # Network failures are ambiguous: Telegram may have accepted the send before timeout.
+            log.warning("cover send has ambiguous outcome; suppressing duplicate fallback: %s", exc)
+            return "unknown"
+    return "rejected"
+
+
 async def song_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -157,47 +197,236 @@ async def _show_song(query_or_update, context, song_id: int, edit: bool = False)
 
     await increment_stat("song_views")
     caption = song_caption(song)
-    keyboard = song_card(song)
-    cover = song.get("cover")
-
-    # Store last song for favorite
-    if cq:
-        context.user_data["last_song"] = song
-
-    # Try to send with photo if available
-    try:
-        if edit and cq:
-            # If we have a cover, we can't edit text to photo — send new message
-            if cover:
-                await cq.message.reply_photo(
-                    photo=cover,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
-                )
-                # Optionally delete loading message? Keep it
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-                # Actually delete the loading if we sent photo; better to just send photo and keep text
-                # For simplicity, send photo + delete old text not needed
-            else:
-                await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-        else:
-            # Called from command / direct
-            msg_target = query_or_update.message if hasattr(query_or_update, "message") else query_or_update
-            if cover:
-                await msg_target.reply_photo(photo=cover, caption=caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-            else:
-                await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-    except Exception as e:
-        log.warning("send song card failed: %s", e)
+    actor = cq.from_user if cq else getattr(query_or_update, "effective_user", None)
+    actual_song_id = int(song.get("id") or song_id)
+    title = str(song.get("song") or song.get("title") or f"اثر #{actual_song_id}")
+    artist = str(song.get("artist") or "")
+    if context and hasattr(context, "user_data"):
+        cache = context.user_data.setdefault("song_metadata", {})
+        cache[str(actual_song_id)] = {"title": title[:250], "artist": artist[:250]}
+        while len(cache) > 30:
+            cache.pop(next(iter(cache)))
+    liked, like_count = await favorite_state(actor.id, actual_song_id) if actor else (False, 0)
+    keyboard = song_card(
+        song,
+        is_admin=bool(actor and is_admin(actor.id)),
+        is_favorite=liked,
+        like_count=like_count,
+    )
+    if cq and edit:
+        photo_status = await _send_card_photo(cq.message, song, caption, keyboard)
+        if "sent" == photo_status:
+            # Remove the old search/list message to avoid the previous duplicate text + photo card.
+            try:
+                await cq.message.delete()
+            except Exception:
+                try:
+                    await cq.edit_message_text("✅ کارت کامل اثر در پیام بعدی است.")
+                except Exception:
+                    pass
+            return
+        if "unknown" == photo_status:
+            return  # Never send a second card when Telegram's first response timed out ambiguously.
         try:
-            fallback = caption + "\n\n(تصویر بارگذاری نشد)"
-            if cq:
-                await cq.edit_message_text(fallback, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-            else:
-                await query_or_update.message.reply_text(fallback, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            await cq.edit_message_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        except Exception as exc:
+            log.warning("editing song card failed: %s", exc)
+        return
+
+    msg_target = query_or_update.message if hasattr(query_or_update, "message") else query_or_update
+    photo_status = await _send_card_photo(msg_target, song, caption, keyboard)
+    if "sent" == photo_status or "unknown" == photo_status:
+        return
+    try:
+        await msg_target.reply_text(caption, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    except Exception as exc:
+        log.warning("sending text-only song card failed: %s", exc)
+
+def _favorite_button_label(liked: bool, like_count: int) -> str:
+    label = "❤️ پسندیدم" if liked else "🤍 می‌پسندم"
+    return label + (f" · {int(like_count)}" if int(like_count) > 0 else "")
+
+
+async def favorite_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    try:
+        song_id = int(query.data.split(":", 1)[1])
+    except (AttributeError, IndexError, ValueError):
+        await query.answer("شناسهٔ اثر نامعتبر است.", show_alert=True)
+        return
+    user = update.effective_user
+    if not user:
+        await query.answer("حساب کاربری در دسترس نیست.", show_alert=True)
+        return
+    await query.answer("در حال ثبت پسند…")
+
+    cache = context.user_data.get("song_metadata", {})
+    metadata = cache.get(str(song_id)) if isinstance(cache, dict) else None
+    if not metadata:
+        try:
+            song = await api.song(song_id)
+            metadata = {
+                "title": str(song.get("song") or song.get("title") or f"اثر #{song_id}"),
+                "artist": str(song.get("artist") or ""),
+            }
         except Exception:
-            pass
+            log.exception("could not load song metadata for favorite %s", song_id)
+            if query.message:
+                await query.message.reply_text("❌ اطلاعات اثر برای ثبت پسند در دسترس نیست؛ دوباره کارت آهنگ را باز کنید.")
+            return
+
+    try:
+        liked, like_count = await toggle_favorite(
+            user.id,
+            song_id,
+            str(metadata.get("title") or ""),
+            str(metadata.get("artist") or ""),
+        )
+    except Exception:
+        log.exception("could not toggle song favorite for user %s", user.id)
+        if query.message:
+            await query.message.reply_text("❌ ثبت پسند انجام نشد؛ کمی بعد دوباره تلاش کنید.")
+        return
+
+    old_markup = getattr(query.message, "reply_markup", None) if query.message else None
+    rows = []
+    replaced = False
+    if old_markup:
+        for row in old_markup.inline_keyboard:
+            new_row = []
+            for button in row:
+                if getattr(button, "callback_data", None) == f"favorite:{song_id}":
+                    button = InlineKeyboardButton(
+                        _favorite_button_label(liked, like_count),
+                        callback_data=f"favorite:{song_id}",
+                    )
+                    replaced = True
+                new_row.append(button)
+            rows.append(new_row)
+    if replaced:
+        try:
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(rows))
+        except Exception as exc:
+            log.info("favorite saved but Telegram card markup could not be refreshed: %s", type(exc).__name__)
+            if query.message:
+                await query.message.reply_text(
+                    "❤️ به پسندیده‌ها افزوده شد." if liked else "💔 پسند از این اثر برداشته شد."
+                )
+    elif query.message:
+        await query.message.reply_text(
+            "❤️ به پسندیده‌ها افزوده شد." if liked else "💔 پسند از این اثر برداشته شد."
+        )
+
+
+async def _send_favorites_page(target, user_id: int, page: int = 1, *, edit: bool = False):
+    data = await list_favorites_page(user_id, page=page, per_page=8)
+    total = int(data["total"])
+    total_pages = max(1, (total + data["per_page"] - 1) // data["per_page"])
+    page = min(max(1, int(page)), total_pages)
+    if page != data["page"]:
+        data = await list_favorites_page(user_id, page=page, per_page=8)
+
+    keyboard = []
+    lines = [f"❤️ <b>آثار پسندیدهٔ شما</b> — {total:,} اثر".replace(",", "٬")]
+    if data["results"]:
+        lines.append(f"صفحهٔ {page} از {total_pages}:\n")
+        semaphore = asyncio.Semaphore(4)
+
+        async def load_current_song(song_id: int):
+            try:
+                async with semaphore:
+                    return await api.song(song_id), "ok"
+            except APIError as exc:
+                return None, "missing" if exc.status == 404 else "unavailable"
+            except Exception:
+                log.info("could not refresh saved song %s from WordPress", song_id)
+                return None, "unavailable"
+
+        valid_items = [item for item in data["results"] if int(item.get("song_id") or 0) > 0]
+        song_ids = [int(item["song_id"]) for item in valid_items]
+        current_songs = await asyncio.gather(*(load_current_song(song_id) for song_id in song_ids))
+        for item, (song, status) in zip(valid_items, current_songs):
+            song_id = int(item["song_id"])
+            if song:
+                title = " ".join(str(song.get("song") or song.get("title") or f"اثر #{song_id}").split())
+                artist = " ".join(str(song.get("artist") or "").split())
+                status_note = ""
+            else:
+                title = f"اثر #{song_id}"
+                artist = ""
+                status_note = " — دیگر در سایت منتشر نیست" if status == "missing" else " — اطلاعات سایت فعلاً در دسترس نیست"
+            display = f"🎵 {title}" + (f" — {artist}" if artist else "")
+            keyboard.append([
+                InlineKeyboardButton(display[:60], callback_data=f"song:{song_id}"),
+                InlineKeyboardButton("🗑", callback_data=f"favorite_remove:{song_id}:{page}"),
+            ])
+            lines.append(
+                f"• <b>{html.escape(title[:100])}</b>"
+                + (f" — {html.escape(artist[:100])}" if artist else "")
+                + html.escape(status_note)
+            )
+    else:
+        lines.append("\nهنوز اثری را نپسندیده‌اید. از دکمهٔ 🤍 روی کارت آهنگ استفاده کنید.")
+
+    navigation = []
+    if page > 1:
+        navigation.append(InlineKeyboardButton("◀️ قبلی", callback_data=f"favorites:page:{page - 1}"))
+    if total_pages > 1:
+        navigation.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        navigation.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"favorites:page:{page + 1}"))
+    if navigation:
+        keyboard.append(navigation)
+    keyboard.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
+
+    method = target.edit_text if edit else target.reply_text
+    await method("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def favorites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user and update.effective_message:
+        await _send_favorites_page(update.effective_message, user.id)
+
+
+async def favorites_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    if not user:
+        await query.answer("حساب کاربری در دسترس نیست.", show_alert=True)
+        return
+    try:
+        page = max(1, int(query.data.rsplit(":", 1)[1]))
+    except (AttributeError, ValueError):
+        page = 1
+    await query.answer()
+    if query.message:
+        await _send_favorites_page(query.message, user.id, page, edit=True)
+
+
+async def favorite_remove_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    try:
+        _, song_id_text, page_text = query.data.split(":", 2)
+        song_id = int(song_id_text)
+        page = max(1, int(page_text))
+    except (AttributeError, ValueError):
+        await query.answer("درخواست نامعتبر است.", show_alert=True)
+        return
+    if not user:
+        await query.answer("حساب کاربری در دسترس نیست.", show_alert=True)
+        return
+    try:
+        removed = await remove_favorite(user.id, song_id)
+    except Exception:
+        log.exception("could not remove song favorite for user %s", user.id)
+        await query.answer("حذف از پسندیده‌ها انجام نشد.", show_alert=True)
+        return
+    await query.answer("از پسندیده‌ها حذف شد." if removed else "این اثر دیگر در فهرست نیست.")
+    if query.message:
+        await _send_favorites_page(query.message, user.id, page, edit=True)
+
 
 async def song_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:

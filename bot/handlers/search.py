@@ -1,12 +1,13 @@
 import math
 import logging
+import time
 import uuid
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
 from ..api_client import api, APIError
-from ..db import log_search, increment_stat, upsert_user, is_blocked
+from ..db import log_search, increment_stat, is_blocked
 from ..config import is_admin
 from ..utils.normalize import normalize, is_valid_query
 from ..utils.formatters import search_header, no_results, song_list_item
@@ -37,12 +38,13 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         action = shortcuts[text]
         if action != "artist_prompt":
             context.user_data.pop("search_mode", None)
+            context.user_data.pop("search_mode_expires_at", None)
         if action == "search_prompt":
-            context.user_data.pop("search_mode", None)
             await update.message.reply_text("🎵 نام آهنگ موردنظر را بنویسید (مثلاً: بی‌تاب محسن یگانه):")
             return
         elif action == "artist_prompt":
             context.user_data["search_mode"] = "artist"
+            context.user_data["search_mode_expires_at"] = time.time() + 600
             await update.message.reply_text("🎤 نام خواننده را بنویسید (مثلاً: معین، گوگوش، سیاوش قمیشی):")
             return
         elif action == "latest":
@@ -62,7 +64,9 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await help_handler(update, context)
             return
 
-    if context.user_data.pop("search_mode", None) == "artist":
+    search_mode = context.user_data.pop("search_mode", None)
+    search_mode_expires = context.user_data.pop("search_mode_expires_at", 0)
+    if search_mode == "artist" and time.time() <= float(search_mode_expires or 0):
         from .artist import artist_text_search
         await artist_text_search(update, context)
         return
@@ -95,7 +99,7 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     except Exception as e:
         log.exception("search failed")
-        await update.message.reply_text("❌ ارتباط با سایت暂时 برقرار نشد — دوباره تلاش کنید.")
+        await update.message.reply_text("❌ ارتباط با سایت موقتاً برقرار نشد — دوباره تلاش کنید.")
         return
 
     results = data.get("results") or []
@@ -103,8 +107,6 @@ async def search_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user:
         await log_search(user.id, text, len(results))
         await increment_stat("searches")
-        if update.effective_chat and update.effective_chat.type == "private":
-            await upsert_user(user.id, user.username or "", user.first_name or "", user.last_name or "", is_admin=is_admin(user.id))
 
     if not results:
         await update.message.reply_text(

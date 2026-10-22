@@ -5,30 +5,78 @@ import asyncio
 import logging
 import signal
 import time
+
 from telegram import Update
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
-    filters,
     TypeHandler,
-    ApplicationHandlerStop,
+    filters,
 )
 
-from .config import BOT_TOKEN, LOG_LEVEL, validate, RATE_LIMIT_PER_MINUTE, is_admin
-from .db import init_db, is_blocked, check_rate_limit, upsert_user
-from .handlers.start import start_handler, help_handler, ping_handler, help_callback, home_callback, noop_callback, search_prompt_callback
-from .handlers.search import search_text_handler, search_command, search_pagination_callback
-from .handlers.song import song_callback, download_callback, lyrics_callback, related_callback, album_callback, song_command
-from .handlers.artist import artists_list_handler, artist_callback, artist_command
-from .handlers.browse import latest_handler, popular_handler, browse_callback
+from .config import BOT_TOKEN, LOG_LEVEL, RATE_LIMIT_PER_MINUTE, is_admin, validate
+from .db import check_rate_limit, init_db, is_blocked, upsert_user
 from .handlers.admin import (
-    stats_handler, health_handler, cache_clear_handler, block_handler, unblock_handler,
-    broadcast_handler, broadcast_confirm_handler, admin_menu_callback, admin_stats_callback,
-    admin_health_callback, admin_cache_confirm_callback, admin_cache_clear_callback,
-    admin_users_callback, admin_broadcast_help_callback, admin_broadcast_confirm_callback,
     admin_broadcast_cancel_callback,
+    admin_broadcast_confirm_callback,
+    admin_broadcast_help_callback,
+    admin_cache_clear_callback,
+    admin_cache_confirm_callback,
+    admin_channel_publish_cancel_callback,
+    admin_channel_publish_confirm_callback,
+    admin_channel_publish_menu_callback,
+    admin_channel_publish_prepare_callback,
+    admin_health_callback,
+    admin_menu_callback,
+    admin_stats_callback,
+    admin_users_callback,
+    block_handler,
+    broadcast_confirm_handler,
+    broadcast_handler,
+    cache_clear_handler,
+    health_handler,
+    stats_handler,
+    unblock_handler,
+)
+from .handlers.artist import (
+    artist_callback,
+    artist_command,
+    artist_follow_callback,
+    artist_follows_callback,
+    artist_follows_command,
+    artist_unfollow_callback,
+    artists_list_handler,
+)
+from .handlers.browse import browse_callback, latest_handler, popular_handler
+from .handlers.search import (
+    search_command,
+    search_pagination_callback,
+    search_text_handler,
+)
+from .handlers.song import (
+    album_callback,
+    download_callback,
+    favorite_callback,
+    favorite_remove_callback,
+    favorites_callback,
+    favorites_command,
+    lyrics_callback,
+    related_callback,
+    song_callback,
+    song_command,
+)
+from .handlers.start import (
+    artist_search_prompt_callback,
+    help_callback,
+    help_handler,
+    home_callback,
+    noop_callback,
+    ping_handler,
+    search_prompt_callback,
+    start_handler,
 )
 
 logging.basicConfig(
@@ -56,6 +104,15 @@ async def rate_limit_middleware(update: Update, context):
                 await update.effective_message.reply_text("⛔ دسترسی شما به ربات محدود شده است.")
                 context.user_data["blocked_notice_at"] = time.time()
         raise ApplicationHandlerStop
+
+    # The artist prompt is a one-shot, short-lived state; unrelated buttons/commands cancel it.
+    if update.callback_query:
+        if update.callback_query.data != "prompt:artist":
+            context.user_data.pop("search_mode", None)
+            context.user_data.pop("search_mode_expires_at", None)
+    elif update.effective_message and (update.effective_message.text or "").startswith("/"):
+        context.user_data.pop("search_mode", None)
+        context.user_data.pop("search_mode_expires_at", None)
 
     allowed = await check_rate_limit(user.id, RATE_LIMIT_PER_MINUTE)
     if not allowed:
@@ -90,9 +147,9 @@ async def error_handler(update, context):
 def build_app() -> Application:
     errs = validate()
     if errs:
-        for e in errs:
-            log.error("Config error: %s", e)
-        log.warning("ربات با پیکربندی ناقص اجرا می‌شود — برخی قابلیت‌ها کار نمی‌کنند.")
+        for error in errs:
+            log.error("Config error: %s", error)
+        raise RuntimeError("پیکربندی ربات نامعتبر است؛ متغیرهای محیطی الزامی را بررسی کنید.")
 
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -110,6 +167,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("popular", popular_handler))
     app.add_handler(CommandHandler("artist", artist_command))
     app.add_handler(CommandHandler("artists", artists_list_handler))
+    app.add_handler(CommandHandler("favorites", favorites_command))
+    app.add_handler(CommandHandler("following", artist_follows_command))
     # Admin
     app.add_handler(CommandHandler("stats", stats_handler))
     app.add_handler(CommandHandler("admin", stats_handler))
@@ -126,16 +185,27 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(admin_health_callback, pattern=r"^admin:health$"))
     app.add_handler(CallbackQueryHandler(admin_cache_confirm_callback, pattern=r"^admin:cache_confirm$"))
     app.add_handler(CallbackQueryHandler(admin_cache_clear_callback, pattern=r"^admin:cache_clear$"))
-    app.add_handler(CallbackQueryHandler(admin_users_callback, pattern=r"^admin:users$"))
+    app.add_handler(CallbackQueryHandler(admin_users_callback, pattern=r"^admin:users(?::page:\d+)?$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_help_callback, pattern=r"^admin:broadcast_help$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_confirm_callback, pattern=r"^admin:broadcast_confirm$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_cancel_callback, pattern=r"^admin:broadcast_cancel$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_menu_callback, pattern=r"^admin:channel_publish$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_prepare_callback, pattern=r"^admin:channel_publish_prepare:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_confirm_callback, pattern=r"^admin:channel_publish_confirm:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_channel_publish_cancel_callback, pattern=r"^admin:channel_publish_cancel:\d+$"))
     app.add_handler(CallbackQueryHandler(search_prompt_callback, pattern=r"^prompt:search$"))
+    app.add_handler(CallbackQueryHandler(artist_search_prompt_callback, pattern=r"^prompt:artist$"))
     app.add_handler(CallbackQueryHandler(song_callback, pattern=r"^song:\d+$"))
+    app.add_handler(CallbackQueryHandler(favorite_callback, pattern=r"^favorite:\d+$"))
+    app.add_handler(CallbackQueryHandler(favorite_remove_callback, pattern=r"^favorite_remove:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(favorites_callback, pattern=r"^favorites:page:\d+$"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern=r"^dl:\d+:.+$"))
     app.add_handler(CallbackQueryHandler(lyrics_callback, pattern=r"^lyrics:\d+$"))
     app.add_handler(CallbackQueryHandler(related_callback, pattern=r"^related:\d+$"))
     app.add_handler(CallbackQueryHandler(album_callback, pattern=r"^album:\d+$"))
+    app.add_handler(CallbackQueryHandler(artist_follow_callback, pattern=r"^artist_follow:\d+:\d+:(new|old|title)$"))
+    app.add_handler(CallbackQueryHandler(artist_follows_callback, pattern=r"^artist_follows:page:\d+$"))
+    app.add_handler(CallbackQueryHandler(artist_unfollow_callback, pattern=r"^artist_unfollow:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(artist_callback, pattern=r"^artist:.+"))
     app.add_handler(CallbackQueryHandler(artists_list_handler, pattern=r"^artists:(page|letter):.*"))
     app.add_handler(CallbackQueryHandler(browse_callback, pattern=r"^browse:.*"))
@@ -153,8 +223,8 @@ def build_app() -> Application:
     return app
 
 async def main():
-    await init_db()
     app = build_app()
+    await init_db()
 
     # Graceful shutdown
     stop = asyncio.Event()

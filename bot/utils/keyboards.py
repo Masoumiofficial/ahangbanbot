@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+
 # ---------- Main menu (ReplyKeyboard for easy access) ----------
 def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
@@ -24,7 +25,14 @@ def main_inline(is_admin: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🆕 جدیدترین‌ها", callback_data="browse:latest:1"),
             InlineKeyboardButton("🔥 محبوب‌ترین‌ها", callback_data="browse:popular:1"),
         ],
-        [InlineKeyboardButton("🎤 همهٔ خوانندگان", callback_data="artists:page:1")],
+        [
+            InlineKeyboardButton("👤 جست‌وجوی خواننده", callback_data="prompt:artist"),
+            InlineKeyboardButton("🎤 همهٔ خوانندگان", callback_data="artists:page:1"),
+        ],
+        [
+            InlineKeyboardButton("❤️ پسندیده‌ها", callback_data="favorites:page:1"),
+            InlineKeyboardButton("🔔 هنرمندان دنبال‌شده", callback_data="artist_follows:page:1"),
+        ],
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
     ]
     if is_admin:
@@ -58,7 +66,13 @@ def pagination(prefix: str, page: int, total_pages: int, extra: str = "") -> Inl
     buttons.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
     return InlineKeyboardMarkup(buttons)
 
-def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
+def song_card(
+    song: dict,
+    show_qualities: bool = True,
+    is_admin: bool = False,
+    is_favorite: bool = False,
+    like_count: int = 0,
+) -> InlineKeyboardMarkup:
     sid = song.get("id")
     rows = []
     # Qualities
@@ -82,6 +96,12 @@ def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
         if song.get("album_tracks"):
             rows.append([InlineKeyboardButton("💿 ترک‌های آلبوم", callback_data=f"album:{sid}")])
 
+    if str(sid or "").isdigit() and int(sid) > 0:
+        like_label = "❤️ پسندیدم" if is_favorite else "🤍 می‌پسندم"
+        if int(like_count) > 0:
+            like_label += f" · {int(like_count)}"
+        rows.append([InlineKeyboardButton(like_label, callback_data=f"favorite:{int(sid)}")])
+
     # Artists
     artists = song.get("artists") or []
     if artists:
@@ -98,6 +118,10 @@ def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
     if song.get("related"):
         rows.append([InlineKeyboardButton("🎧 آثار مرتبط", callback_data=f"related:{sid}")])
 
+    # Admin-only manual channel publishing; WordPress checks the post is already public.
+    if is_admin and str(sid or "").isdigit() and int(sid) > 0:
+        rows.append([InlineKeyboardButton("📣 انتشار در کانال", callback_data=f"admin:channel_publish_prepare:{int(sid)}")])
+
     # Permalink + Share
     if song.get("permalink"):
         rows.append([InlineKeyboardButton("🔗 صفحه در سایت", url=song["permalink"])])
@@ -108,7 +132,14 @@ def song_card(song: dict, show_qualities: bool = True) -> InlineKeyboardMarkup:
     ])
     return InlineKeyboardMarkup(rows)
 
-def artist_card(term: dict, page: int, total_pages: int, sort: str = "new") -> InlineKeyboardMarkup:
+def artist_card(
+    term: dict,
+    page: int,
+    total_pages: int,
+    sort: str = "new",
+    is_followed: bool = False,
+    follower_count: int = 0,
+) -> InlineKeyboardMarkup:
     slug = term.get("term_id") or term.get("slug")
     rows = []
     # Sort options
@@ -116,6 +147,12 @@ def artist_card(term: dict, page: int, total_pages: int, sort: str = "new") -> I
         InlineKeyboardButton("🕐 جدیدترین" + (" ✅" if sort == "new" else ""), callback_data=f"artist:{slug}:1:new"),
         InlineKeyboardButton("📅 قدیمی‌ترین" + (" ✅" if sort == "old" else ""), callback_data=f"artist:{slug}:1:old"),
     ])
+    term_id = term.get("term_id")
+    if str(term_id or "").isdigit() and int(term_id) > 0:
+        follow_label = "✅ دنبال‌شده" if is_followed else "➕ دنبال‌کردن"
+        if int(follower_count) > 0:
+            follow_label += f" · {int(follower_count)}"
+        rows.append([InlineKeyboardButton(follow_label, callback_data=f"artist_follow:{int(term_id)}:{int(page)}:{sort}")])
     # Pagination
     if total_pages > 1:
         nav = []
@@ -132,8 +169,10 @@ def artist_card(term: dict, page: int, total_pages: int, sort: str = "new") -> I
 
 def artists_list_pagination(page: int, total_pages: int, query: str = "", letter: str = "") -> InlineKeyboardMarkup:
     extra = ""
-    if query: extra += f":q:{query}"
-    if letter: extra += f":l:{letter}"
+    if query:
+        extra += f":q:{query}"
+    if letter:
+        extra += f":l:{letter}"
     buttons = []
     # Letter bar (quick jump) — only show if not filtered
     if not letter and not query:
