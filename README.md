@@ -6,7 +6,7 @@
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
 > ### 📥 دانلود نسخهٔ فعلی — افزونه v1.6.2
-> - **[دانلود ZIP آمادهٔ نصب افزونه v1.6.2](releases/ahangban-connector-1.6.2.zip)**
+> - **[دانلود مستقیم افزونه v1.6.2 از GitHub](https://github.com/Masoumiofficial/ahangbanbot/releases/download/v1.6.2/ahangban-connector-1.6.2.zip)**
 > - در **انتشار دستی کانال از Python polling**، اگر WordPress وضعیت Voice Note را `unavailable` یا `failed` برگرداند، ربات یک‌بار با FFmpeg/libopus خودش تبدیل و ارسال می‌کند؛ وضعیت `queued` هرگز fallback نمی‌شود تا ویس تکراری ساخته نشود.
 > - API انتشار دستی، مقصد کانال و URLهای واقعی کیفیت‌های صوتی همان پست را فقط برای fallback کنترل‌شده برمی‌گرداند؛ webhook PHP مستقل می‌ماند.
 > - در تصویر Docker ربات FFmpeg نصب است؛ در استقرار غیر Docker، FFmpeg دارای libopus باید در محیط Python فراهم شود. نبود آن با پیام صریح گزارش می‌شود و موفقیت جعل نمی‌شود.
