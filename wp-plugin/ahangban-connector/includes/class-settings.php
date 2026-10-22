@@ -15,6 +15,18 @@ class AhangBan_Settings {
     const OPTION_MODE           = 'ahangban_bot_mode';
     const OPTION_CHANNEL_TARGET = 'ahangban_channel_target';
     const OPTION_CHANNEL_AUTO_POST = 'ahangban_channel_auto_post';
+    const OPTION_WELCOME_MESSAGE = 'ahangban_bot_welcome_message';
+    const OPTION_HELP_MESSAGE = 'ahangban_bot_help_message';
+    const OPTION_RESULTS_PER_PAGE = 'ahangban_bot_results_per_page';
+    const OPTION_ARTISTS_PER_PAGE = 'ahangban_bot_artists_per_page';
+    const OPTION_MENU_LATEST = 'ahangban_bot_menu_latest';
+    const OPTION_MENU_POPULAR = 'ahangban_bot_menu_popular';
+    const OPTION_MENU_ARTIST_SEARCH = 'ahangban_bot_menu_artist_search';
+    const OPTION_MENU_ARTIST_LIST = 'ahangban_bot_menu_artist_list';
+    const OPTION_MENU_HELP = 'ahangban_bot_menu_help';
+    const OPTION_CHANNEL_PREVIEW_ENABLED = 'ahangban_channel_preview_enabled';
+    const OPTION_CHANNEL_PREVIEW_SECONDS = 'ahangban_channel_preview_seconds';
+    const OPTION_CHANNEL_CAPTION_FOOTER = 'ahangban_channel_caption_footer';
     const OPTION_SECRET_MIGRATION = 'ahangban_env_secrets_migrated';
 
     public static function init() {
@@ -85,6 +97,48 @@ class AhangBan_Settings {
         return '1' === (string) get_option( self::OPTION_CHANNEL_AUTO_POST, '0' );
     }
 
+    public static function get_bot_welcome_message() {
+        return trim( (string) get_option( self::OPTION_WELCOME_MESSAGE, '' ) );
+    }
+
+    public static function get_bot_help_message() {
+        return trim( (string) get_option( self::OPTION_HELP_MESSAGE, '' ) );
+    }
+
+    public static function get_results_per_page() {
+        return max( 3, min( 10, (int) get_option( self::OPTION_RESULTS_PER_PAGE, 5 ) ) );
+    }
+
+    public static function get_artists_per_page() {
+        return max( 5, min( 15, (int) get_option( self::OPTION_ARTISTS_PER_PAGE, 10 ) ) );
+    }
+
+    public static function is_menu_item_enabled( $item ) {
+        $options = array(
+            'latest' => self::OPTION_MENU_LATEST,
+            'popular' => self::OPTION_MENU_POPULAR,
+            'artist_search' => self::OPTION_MENU_ARTIST_SEARCH,
+            'artist_list' => self::OPTION_MENU_ARTIST_LIST,
+            'help' => self::OPTION_MENU_HELP,
+        );
+        if ( ! isset( $options[ $item ] ) ) { return false; }
+        return '0' !== (string) get_option( $options[ $item ], '1' );
+    }
+
+    public static function is_channel_preview_enabled() {
+        // Keep the release 1.5.3 behavior for existing installations until explicitly disabled.
+        return '0' !== (string) get_option( self::OPTION_CHANNEL_PREVIEW_ENABLED, '1' );
+    }
+
+    public static function get_channel_preview_seconds() {
+        $seconds = (int) get_option( self::OPTION_CHANNEL_PREVIEW_SECONDS, 60 );
+        return in_array( $seconds, array( 15, 30, 45, 60 ), true ) ? $seconds : 60;
+    }
+
+    public static function get_channel_caption_footer() {
+        return trim( (string) get_option( self::OPTION_CHANNEL_CAPTION_FOOTER, '' ) );
+    }
+
     public static function normalize_channel_target( $target ) {
         $target = trim( (string) $target );
         if ( '' === $target ) { return ''; }
@@ -136,6 +190,13 @@ class AhangBan_Settings {
             }
         }
         return true;
+    }
+
+    private static function text_length( $text ) {
+        $text = (string) $text;
+        if ( function_exists( 'mb_strlen' ) ) { return mb_strlen( $text, 'UTF-8' ); }
+        $characters = preg_split( '//u', $text, -1, PREG_SPLIT_NO_EMPTY );
+        return is_array( $characters ) ? count( $characters ) : strlen( $text );
     }
 
     /** Validate all submitted settings first; a bad field never partially saves other fields. */
@@ -204,6 +265,56 @@ class AhangBan_Settings {
             }
         }
 
+        if ( array_key_exists( 'welcome_message', $data ) ) {
+            $welcome_message = sanitize_textarea_field( (string) $data['welcome_message'] );
+            if ( self::text_length( $welcome_message ) > 3500 ) {
+                $errors[] = 'متن خوش‌آمدگویی حداکثر می‌تواند ۳۵۰۰ نویسه باشد.';
+            } else {
+                $values[ self::OPTION_WELCOME_MESSAGE ] = $welcome_message;
+            }
+        }
+
+        if ( array_key_exists( 'help_message', $data ) ) {
+            $help_message = sanitize_textarea_field( (string) $data['help_message'] );
+            if ( self::text_length( $help_message ) > 3500 ) {
+                $errors[] = 'متن راهنمای ربات حداکثر می‌تواند ۳۵۰۰ نویسه باشد.';
+            } else {
+                $values[ self::OPTION_HELP_MESSAGE ] = $help_message;
+            }
+        }
+
+        if ( isset( $data['results_per_page'] ) ) {
+            $results_per_page = trim( (string) $data['results_per_page'] );
+            if ( ! ctype_digit( $results_per_page ) || (int) $results_per_page < 3 || (int) $results_per_page > 10 ) {
+                $errors[] = 'تعداد نتیجه در هر صفحه باید عددی بین ۳ تا ۱۰ باشد.';
+            } else {
+                $values[ self::OPTION_RESULTS_PER_PAGE ] = (string) (int) $results_per_page;
+            }
+        }
+
+        if ( isset( $data['artists_per_page'] ) ) {
+            $artists_per_page = trim( (string) $data['artists_per_page'] );
+            if ( ! ctype_digit( $artists_per_page ) || (int) $artists_per_page < 5 || (int) $artists_per_page > 15 ) {
+                $errors[] = 'تعداد هنرمند در هر صفحه باید عددی بین ۵ تا ۱۵ باشد.';
+            } else {
+                $values[ self::OPTION_ARTISTS_PER_PAGE ] = (string) (int) $artists_per_page;
+            }
+        }
+
+        $menu_options = array(
+            'menu_latest' => self::OPTION_MENU_LATEST,
+            'menu_popular' => self::OPTION_MENU_POPULAR,
+            'menu_artist_search' => self::OPTION_MENU_ARTIST_SEARCH,
+            'menu_artist_list' => self::OPTION_MENU_ARTIST_LIST,
+            'menu_help' => self::OPTION_MENU_HELP,
+        );
+        foreach ( $menu_options as $field => $option ) {
+            if ( array_key_exists( $field, $data ) ) {
+                $enabled = in_array( (string) $data[ $field ], array( '1', 'true', 'yes', 'on' ), true );
+                $values[ $option ] = $enabled ? '1' : '0';
+            }
+        }
+
         if ( isset( $data['channel_target'] ) ) {
             $channel_target = trim( (string) $data['channel_target'] );
             $valid = self::validate_channel_target( $channel_target );
@@ -223,6 +334,29 @@ class AhangBan_Settings {
                 $errors[] = 'برای فعال‌کردن ارسال خودکار، ابتدا شناسه یا یوزرنیم کانال را وارد کنید.';
             } else {
                 $values[ self::OPTION_CHANNEL_AUTO_POST ] = $enabled ? '1' : '0';
+            }
+        }
+
+        if ( array_key_exists( 'channel_preview_enabled', $data ) ) {
+            $enabled = in_array( (string) $data['channel_preview_enabled'], array( '1', 'true', 'yes', 'on' ), true );
+            $values[ self::OPTION_CHANNEL_PREVIEW_ENABLED ] = $enabled ? '1' : '0';
+        }
+
+        if ( isset( $data['channel_preview_seconds'] ) ) {
+            $seconds = trim( (string) $data['channel_preview_seconds'] );
+            if ( ! in_array( $seconds, array( '15', '30', '45', '60' ), true ) ) {
+                $errors[] = 'مدت پیش‌نمایش ویس باید یکی از گزینه‌های ۱۵، ۳۰، ۴۵ یا ۶۰ ثانیه باشد.';
+            } else {
+                $values[ self::OPTION_CHANNEL_PREVIEW_SECONDS ] = (string) (int) $seconds;
+            }
+        }
+
+        if ( array_key_exists( 'channel_caption_footer', $data ) ) {
+            $footer = sanitize_textarea_field( (string) $data['channel_caption_footer'] );
+            if ( self::text_length( $footer ) > 180 ) {
+                $errors[] = 'متن پایانی کپشن کانال حداکثر می‌تواند ۱۸۰ نویسه باشد.';
+            } else {
+                $values[ self::OPTION_CHANNEL_CAPTION_FOOTER ] = $footer;
             }
         }
 

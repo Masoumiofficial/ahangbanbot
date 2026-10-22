@@ -99,6 +99,7 @@ def test_channel_publish_preview_uses_requested_layout_and_escapes_post_content(
     assert 'href="https://example.org/song/12?a=1&amp;b=2"' in preview
     assert "🔗 <a" in preview
     assert "🆔️ @Ahangban_ir 💙" in preview
+    assert "اگر پیش‌نمایش ویس در تنظیمات WordPress روشن باشد" in preview
     assert "<b>عنوان</b>" not in preview
 
 
@@ -181,3 +182,25 @@ async def test_channel_publish_confirmation_is_consumed_before_sending():
     assert "channel_publish_pending" not in context.user_data
     assert any("در کانال منتشر شد" in text for text, _ in query.edits)
     assert any("صف WP-Cron" in text for text, _ in query.edits)
+    assert any("ویس 60 ثانیه‌ای" in text for text, _ in query.edits)
+
+
+@pytest.mark.asyncio
+async def test_channel_publish_confirmation_reports_disabled_voice_preview():
+    update, query = _callback_update("admin:channel_publish_confirm:731", user_id=100)
+    context = SimpleNamespace(user_data={
+        "channel_publish_pending": {"post_id": 731, "created_at": time.time()},
+    })
+    publish = AsyncMock(return_value={
+        "status": "sent",
+        "post_id": 731,
+        "message_id": 99,
+        "preview_status": "disabled",
+        "preview_duration": 0,
+    })
+    with patch("bot.handlers.admin.is_admin", return_value=True), patch(
+        "bot.handlers.admin.api.publish_channel_post", new=publish
+    ):
+        await admin_channel_publish_confirm_callback(update, context)
+    publish.assert_awaited_once_with(731)
+    assert any("پیش‌نمایش ویس از تنظیمات پیشخوان خاموش است" in text for text, _ in query.edits)

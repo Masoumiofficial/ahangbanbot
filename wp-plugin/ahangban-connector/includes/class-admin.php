@@ -40,9 +40,25 @@ class AhangBan_Admin {
         );
     }
 
+    /** Return a safe technical detail for an administrator without exposing the token-bearing API URL. */
+    private static function safe_telegram_error_detail( $message, $token = '', $params = array() ) {
+        $message = is_scalar( $message ) ? (string) $message : '';
+        if ( '' !== (string) $token ) { $message = str_replace( (string) $token, '[توکن حذف شد]', $message ); }
+        if ( is_array( $params ) && ! empty( $params['secret_token'] ) ) { $message = str_replace( (string) $params['secret_token'], '[Secret حذف شد]', $message ); }
+        if ( function_exists( 'wp_check_invalid_utf8' ) ) { $message = wp_check_invalid_utf8( $message, true ); }
+        $message = preg_replace( '~https?://api\.telegram\.org/bot[^/\s]+~i', 'https://api.telegram.org/bot[REDACTED]', $message );
+        $message = preg_replace( '~(https?://[^?\\s]+)\\?[^\\s]+~i', '$1?[پارامترها حذف شد]', $message );
+        $message = wp_strip_all_tags( (string) $message );
+        $message = preg_replace( '/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]+/', ' ', $message );
+        $message = trim( preg_replace( '/\\s+/u', ' ', $message ) );
+        if ( function_exists( 'wp_html_excerpt' ) ) { $message = wp_html_excerpt( $message, 600, '…' ); }
+        elseif ( strlen( $message ) > 600 ) { $message = substr( $message, 0, 600 ) . '…'; }
+        return '' !== $message ? $message : 'جزئیات بیشتری از کتابخانهٔ HTTP وردپرس دریافت نشد.';
+    }
+
     private static function telegram_api( $token, $method, $params = array() ) {
         if ( '' === $token ) { return new WP_Error( 'no_token', 'توکن ربات در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.' ); }
-        if ( ! in_array( $method, array( 'sendMessage', 'setWebhook', 'deleteWebhook' ), true ) ) {
+        if ( ! in_array( $method, array( 'sendMessage', 'setWebhook', 'deleteWebhook', 'getMe', 'getWebhookInfo' ), true ) ) {
             return new WP_Error( 'invalid_method', 'عملیات تلگرام نامعتبر است.' );
         }
         $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
@@ -53,11 +69,24 @@ class AhangBan_Admin {
             'headers' => array( 'Content-Type' => 'application/json' ),
             'body' => wp_json_encode( $params, JSON_UNESCAPED_UNICODE ),
         ) );
-        // Never return a transport message containing the token-bearing URL to the admin screen.
-        if ( is_wp_error( $response ) ) { return new WP_Error( 'telegram_transport', 'ارتباط امن با تلگرام برقرار نشد.' ); }
+        if ( is_wp_error( $response ) ) {
+            $detail = self::safe_telegram_error_detail( implode( ' | ', $response->get_error_messages() ), $token, $params );
+            $error_code = sanitize_key( $response->get_error_code() );
+            return new WP_Error( 'telegram_transport', 'ارتباط امن با تلگرام برقرار نشد. جزئیات فنی' . ( $error_code ? ' (' . $error_code . ')' : '' ) . ': ' . $detail );
+        }
+
         $code = (int) wp_remote_retrieve_response_code( $response );
-        if ( $code < 200 || $code >= 300 ) { return new WP_Error( 'telegram_http', 'پاسخ HTTP تلگرام نامعتبر بود (' . $code . ').' ); }
-        $json = json_decode( wp_remote_retrieve_body( $response ), true );
+        $body = wp_remote_retrieve_body( $response );
+        $json = json_decode( $body, true );
+        if ( $code < 200 || $code >= 300 ) {
+            $message = 'پاسخ HTTP تلگرام نامعتبر بود (HTTP ' . $code . ').';
+            if ( is_array( $json ) && ! empty( $json['description'] ) ) {
+                $description = self::safe_telegram_error_detail( $json['description'], $token, $params );
+                $message .= ' توضیح تلگرام: ' . $description;
+            }
+            if ( is_array( $json ) && isset( $json['error_code'] ) ) { $message .= ' کد تلگرام: ' . (int) $json['error_code'] . '.'; }
+            return new WP_Error( 'telegram_http', $message );
+        }
         return is_array( $json ) ? $json : new WP_Error( 'telegram_response', 'پاسخ تلگرام قابل‌خواندن نیست.' );
     }
 
@@ -114,10 +143,33 @@ class AhangBan_Admin {
             self::redirect_after_action();
         }
 
+        if ( 'save_behavior' === $action ) {
+            $errors = AhangBan_Settings::save( array(
+                'welcome_message' => isset( $_POST['welcome_message'] ) ? wp_unslash( $_POST['welcome_message'] ) : '',
+                'help_message' => isset( $_POST['help_message'] ) ? wp_unslash( $_POST['help_message'] ) : '',
+                'results_per_page' => isset( $_POST['results_per_page'] ) ? wp_unslash( $_POST['results_per_page'] ) : '',
+                'artists_per_page' => isset( $_POST['artists_per_page'] ) ? wp_unslash( $_POST['artists_per_page'] ) : '',
+                'menu_latest' => isset( $_POST['menu_latest'] ) ? wp_unslash( $_POST['menu_latest'] ) : '0',
+                'menu_popular' => isset( $_POST['menu_popular'] ) ? wp_unslash( $_POST['menu_popular'] ) : '0',
+                'menu_artist_search' => isset( $_POST['menu_artist_search'] ) ? wp_unslash( $_POST['menu_artist_search'] ) : '0',
+                'menu_artist_list' => isset( $_POST['menu_artist_list'] ) ? wp_unslash( $_POST['menu_artist_list'] ) : '0',
+                'menu_help' => isset( $_POST['menu_help'] ) ? wp_unslash( $_POST['menu_help'] ) : '0',
+            ) );
+            if ( empty( $errors ) ) {
+                add_settings_error( 'ahangban_connector', 'behavior_saved', '✅ رفتار ربات و منوی اصلی ذخیره شد. تغییر متن و منو از پیام بعدی کاربران اعمال می‌شود.', 'updated' );
+            } else {
+                foreach ( $errors as $error ) { add_settings_error( 'ahangban_connector', 'behavior_err', $error, 'error' ); }
+            }
+            self::redirect_after_action();
+        }
+
         if ( 'save_channel' === $action ) {
             $errors = AhangBan_Settings::save( array(
                 'channel_target' => isset( $_POST['channel_target'] ) ? wp_unslash( $_POST['channel_target'] ) : '',
                 'channel_auto_post' => isset( $_POST['channel_auto_post'] ) ? wp_unslash( $_POST['channel_auto_post'] ) : '0',
+                'channel_preview_enabled' => isset( $_POST['channel_preview_enabled'] ) ? wp_unslash( $_POST['channel_preview_enabled'] ) : '0',
+                'channel_preview_seconds' => isset( $_POST['channel_preview_seconds'] ) ? wp_unslash( $_POST['channel_preview_seconds'] ) : '60',
+                'channel_caption_footer' => isset( $_POST['channel_caption_footer'] ) ? wp_unslash( $_POST['channel_caption_footer'] ) : '',
             ) );
             if ( empty( $errors ) ) {
                 add_settings_error( 'ahangban_connector', 'channel_saved', '✅ تنظیمات کانال ذخیره شد. برای انتشار واقعی، ربات باید مدیر کانال باشد.', 'updated' );
@@ -145,6 +197,49 @@ class AhangBan_Admin {
                 add_settings_error( 'ahangban_connector', 'channel_test_ok', '✅ پیام آزمایشی در کانال ارسال شد؛ دسترسی انتشار تأیید شد.', 'updated' );
             } else {
                 add_settings_error( 'ahangban_connector', 'channel_test_err', 'تلگرام پیام را نپذیرفت: ' . esc_html( $response['description'] ?? 'پاسخ نامشخص' ), 'error' );
+            }
+            self::redirect_after_action();
+        }
+
+        if ( 'check_connection' === $action ) {
+            $token = AhangBan_Settings::get_bot_token();
+            $me = self::telegram_api( $token, 'getMe' );
+            if ( is_wp_error( $me ) ) {
+                add_settings_error( 'ahangban_connector', 'telegram_connection_err', esc_html( $me->get_error_message() ), 'error' );
+                self::redirect_after_action();
+            }
+            if ( empty( $me['ok'] ) || empty( $me['result'] ) ) {
+                $description = self::safe_telegram_error_detail( $me['description'] ?? 'پاسخ تلگرام نامشخص است.', $token );
+                add_settings_error( 'ahangban_connector', 'telegram_connection_err', 'تلگرام درخواست getMe را نپذیرفت: ' . esc_html( $description ), 'error' );
+                self::redirect_after_action();
+            }
+
+            $username = sanitize_text_field( (string) ( $me['result']['username'] ?? '' ) );
+            $bot_label = '' !== $username ? '@' . $username : 'ربات';
+            $info = self::telegram_api( $token, 'getWebhookInfo' );
+            if ( is_wp_error( $info ) ) {
+                add_settings_error( 'ahangban_connector', 'telegram_connection_err', '✅ اتصال API برای ' . esc_html( $bot_label ) . ' برقرار است؛ اما وضعیت وب‌هوک دریافت نشد: ' . esc_html( $info->get_error_message() ), 'error' );
+                self::redirect_after_action();
+            }
+            if ( empty( $info['ok'] ) || ! is_array( $info['result'] ?? null ) ) {
+                $description = self::safe_telegram_error_detail( $info['description'] ?? 'پاسخ تلگرام نامشخص است.', $token );
+                add_settings_error( 'ahangban_connector', 'telegram_connection_err', '✅ اتصال API برقرار است؛ اما Telegram وضعیت وب‌هوک را نپذیرفت: ' . esc_html( $description ), 'error' );
+                self::redirect_after_action();
+            }
+
+            $hook = $info['result'];
+            $hook_url = trim( (string) ( $hook['url'] ?? '' ) );
+            $safe_hook_url = self::safe_telegram_error_detail( $hook_url, $token );
+            $pending = max( 0, (int) ( $hook['pending_update_count'] ?? 0 ) );
+            $last_error = self::safe_telegram_error_detail( $hook['last_error_message'] ?? '', $token );
+            $message = '✅ اتصال API برقرار است — ' . esc_html( $bot_label ) . '. ';
+            $message .= '' !== $hook_url ? 'وب‌هوک در تلگرام ثبت شده است: <code>' . esc_html( $safe_hook_url ) . '</code>.' : 'در حال حاضر وب‌هوکی در تلگرام ثبت نشده است.';
+            $message .= ' درخواست‌های در صف: ' . $pending . '.';
+            if ( ! empty( $hook['last_error_message'] ) ) {
+                $message .= ' آخرین خطای دریافت Telegram: ' . esc_html( $last_error );
+                add_settings_error( 'ahangban_connector', 'telegram_connection_status', $message, 'error' );
+            } else {
+                add_settings_error( 'ahangban_connector', 'telegram_connection_status', $message, 'updated' );
             }
             self::redirect_after_action();
         }
@@ -238,9 +333,21 @@ class AhangBan_Admin {
         $bot_username = AhangBan_Settings::get_bot_username();
         $admin_ids = implode( ', ', AhangBan_Settings::get_admin_ids() );
         $bot_mode = AhangBan_Settings::get_mode();
+        $welcome_message = AhangBan_Settings::get_bot_welcome_message();
+        $help_message = AhangBan_Settings::get_bot_help_message();
+        $results_per_page = AhangBan_Settings::get_results_per_page();
+        $artists_per_page = AhangBan_Settings::get_artists_per_page();
+        $menu_latest = AhangBan_Settings::is_menu_item_enabled( 'latest' );
+        $menu_popular = AhangBan_Settings::is_menu_item_enabled( 'popular' );
+        $menu_artist_search = AhangBan_Settings::is_menu_item_enabled( 'artist_search' );
+        $menu_artist_list = AhangBan_Settings::is_menu_item_enabled( 'artist_list' );
+        $menu_help = AhangBan_Settings::is_menu_item_enabled( 'help' );
         $channel_target = AhangBan_Settings::get_channel_target();
         $channel_auto_post = AhangBan_Settings::is_channel_auto_post_enabled();
-        $channel_preview_ready = AhangBan_Telegram::is_channel_preview_renderer_available();
+        $channel_preview_enabled = AhangBan_Settings::is_channel_preview_enabled();
+        $channel_preview_seconds = AhangBan_Settings::get_channel_preview_seconds();
+        $channel_caption_footer = AhangBan_Settings::get_channel_caption_footer();
+        $channel_preview_ready = $channel_preview_enabled && AhangBan_Telegram::is_channel_preview_renderer_available();
         $taxonomy = AhangBan_Search::get_taxonomy();
         $taxonomy_exists = taxonomy_exists( $taxonomy );
         $legacy_singer = taxonomy_exists( 'singer' ) && 'singer' !== $taxonomy;
@@ -269,7 +376,7 @@ class AhangBan_Admin {
                     <div class="ab-status-item"><span>توکن ربات تلگرام</span><strong class="<?php echo $bot_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $bot_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
                     <div class="ab-status-item"><span>Secret وب‌هوک</span><strong class="<?php echo $secret_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $secret_ready ? 'پیکربندی شده' : 'نیازمند تنظیم'; ?></strong></div>
                     <div class="ab-status-item"><span>نسخهٔ PHP / وردپرس</span><strong><?php echo esc_html( PHP_VERSION . ' / ' . get_bloginfo( 'version' ) ); ?></strong></div>
-                    <div class="ab-status-item"><span>تبدیل ویس کانال</span><strong class="<?php echo $channel_preview_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo $channel_preview_ready ? 'FFmpeg + Opus آماده' : 'نیازمند بررسی هاست'; ?></strong></div>
+                    <div class="ab-status-item"><span>پیش‌نمایش ویس کانال</span><strong class="<?php echo $channel_preview_enabled && $channel_preview_ready ? 'ab-state-ok' : 'ab-state-warn'; ?>"><?php echo ! $channel_preview_enabled ? 'با تنظیم مدیر خاموش است' : ( $channel_preview_ready ? 'FFmpeg + Opus آماده' : 'نیازمند بررسی هاست' ); ?></strong></div>
                     <div class="ab-status-item"><span>تاکسونومی هنرمند</span><strong><?php echo $taxonomy_exists ? 'فعال · ' . esc_html( $taxonomy ) : 'ثبت نشده'; ?></strong></div>
                     <div class="ab-status-item"><span>هنرمندان / نوشته‌های منتشرشده</span><strong><?php echo esc_html( number_format_i18n( (int) $artist_count ) . ' / ' . number_format_i18n( $published_posts ) ); ?></strong></div>
                 </div>
@@ -336,16 +443,66 @@ class AhangBan_Admin {
                 </form>
             </section>
 
+            <section class="ab-card ab-card--settings" aria-labelledby="ab-behavior-title">
+                <div class="ab-card-heading"><div><span class="ab-step">۰۴</span><h2 id="ab-behavior-title">رفتار و تجربهٔ کاربری ربات</h2></div><span class="ab-muted">متن، صفحه‌بندی و منوی شروع</span></div>
+                <p>این گزینه‌ها مستقیماً روی ربات PHP در حالت وب‌هوک اعمال می‌شوند. خالی‌گذاشتن متن‌ها، متن پیش‌فرض آهنگ‌بان را برمی‌گرداند؛ این متن‌ها ساده هستند و HTML نمی‌پذیرند.</p>
+                <form method="post">
+                    <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
+                    <input type="hidden" name="ahangban_action" value="save_behavior">
+                    <table class="form-table" role="presentation">
+                        <tr>
+                            <th scope="row"><label for="welcome_message">پیام شروع</label></th>
+                            <td>
+                                <textarea id="welcome_message" name="welcome_message" rows="5" maxlength="3500" class="large-text" placeholder="برای استفاده از متن پیش‌فرض خالی بگذارید."><?php echo esc_textarea( $welcome_message ); ?></textarea>
+                                <p class="description">پیام ارسالی به دستور <code>/start</code>. برای درج نام کاربر از <code dir="ltr">%first_name%</code> استفاده کنید. حداکثر ۳۵۰۰ نویسه.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="help_message">متن راهنما</label></th>
+                            <td>
+                                <textarea id="help_message" name="help_message" rows="5" maxlength="3500" class="large-text" placeholder="برای استفاده از راهنمای پیش‌فرض خالی بگذارید."><?php echo esc_textarea( $help_message ); ?></textarea>
+                                <p class="description">پیام دستور <code>/help</code>؛ متن ساده و حداکثر ۳۵۰۰ نویسه.</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="results_per_page">نتایج آهنگ در هر صفحه</label></th>
+                            <td><input type="number" id="results_per_page" name="results_per_page" value="<?php echo esc_attr( $results_per_page ); ?>" min="3" max="10" step="1" class="small-text"><p class="description">برای جست‌وجو، جدیدترین‌ها، محبوب‌ترین‌ها و انتخاب پست کانال؛ بین ۳ تا ۱۰.</p></td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="artists_per_page">هنرمند در هر صفحه</label></th>
+                            <td><input type="number" id="artists_per_page" name="artists_per_page" value="<?php echo esc_attr( $artists_per_page ); ?>" min="5" max="15" step="1" class="small-text"><p class="description">برای فهرست و جست‌وجوی خوانندگان؛ بین ۵ تا ۱۵.</p></td>
+                        </tr>
+                        <tr>
+                            <th scope="row">نمایش دکمه‌های منوی شروع</th>
+                            <td>
+                                <div class="ab-toggle-grid">
+                                    <label><input type="hidden" name="menu_latest" value="0"><input type="checkbox" name="menu_latest" value="1" <?php checked( $menu_latest ); ?>> جدیدترین‌ها</label>
+                                    <label><input type="hidden" name="menu_popular" value="0"><input type="checkbox" name="menu_popular" value="1" <?php checked( $menu_popular ); ?>> محبوب‌ترین‌ها</label>
+                                    <label><input type="hidden" name="menu_artist_search" value="0"><input type="checkbox" name="menu_artist_search" value="1" <?php checked( $menu_artist_search ); ?>> جست‌وجوی خواننده</label>
+                                    <label><input type="hidden" name="menu_artist_list" value="0"><input type="checkbox" name="menu_artist_list" value="1" <?php checked( $menu_artist_list ); ?>> فهرست خوانندگان</label>
+                                    <label><input type="hidden" name="menu_help" value="0"><input type="checkbox" name="menu_help" value="1" <?php checked( $menu_help ); ?>> راهنما</label>
+                                </div>
+                                <p class="description">این گزینه‌ها فقط نمایش دکمه‌ها در منوی شروع را کنترل می‌کنند؛ دستورهای متنی ربات همچنان قابل استفاده‌اند.</p>
+                            </td>
+                        </tr>
+                    </table>
+                    <button type="submit" class="button button-primary">ذخیرهٔ رفتار ربات</button>
+                </form>
+            </section>
+
             <section class="ab-card" aria-labelledby="ab-channel-title">
-                <div class="ab-card-heading"><div><span class="ab-step">۰۴</span><h2 id="ab-channel-title">اتصال کانال تلگرام</h2></div><span class="ab-badge <?php echo $channel_auto_post ? 'ab-badge--on' : 'ab-badge--off'; ?>">انتشار خودکار <?php echo $channel_auto_post ? 'روشن' : 'خاموش'; ?></span></div>
+                <div class="ab-card-heading"><div><span class="ab-step">۰۵</span><h2 id="ab-channel-title">اتصال کانال تلگرام</h2></div><span class="ab-badge <?php echo $channel_auto_post ? 'ab-badge--on' : 'ab-badge--off'; ?>">انتشار خودکار <?php echo $channel_auto_post ? 'روشن' : 'خاموش'; ?></span></div>
                 <p>فقط آهنگ/آلبوم/ویدیوی موسیقیِ تازه و قابل‌تشخیص از داده‌های واقعی وردپرس در صف WP-Cron قرار می‌گیرد. نوشته‌های معمولی و محتوای قدیمی بازنشر نمی‌شوند.</p>
-                <p class="ab-notice ab-notice--warning">نمونهٔ ۶۰ ثانیه‌ای به‌صورت ویسِ reply پس از پست می‌آید؛ ساخت آن به FFmpeg دارای libopus و فعال‌بودن <code>proc_open</code> در PHP نیاز دارد. اگر وضعیت بالا آماده نباشد، پست اصلی همچنان منتشر می‌شود اما ویس ارسال نمی‌شود. WP-Cron نیز باید اجرا شود.</p>
+                <p class="ab-notice ab-notice--warning">اگر پیش‌نمایش فعال باشد، نمونه‌ای از فایل واقعی موسیقی با مدت انتخاب‌شده به‌صورت Voice Note و reply به پست فرستاده می‌شود. ساخت آن به FFmpeg دارای libopus، <code>proc_open</code> و WP-Cron نیاز دارد؛ اگر FFmpeg آماده نباشد، پست اصلی همچنان منتشر می‌شود اما ویس ارسال نمی‌شود.</p>
                 <form method="post" class="ab-form-block">
                     <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
                     <input type="hidden" name="ahangban_action" value="save_channel">
                     <table class="form-table" role="presentation">
                         <tr><th scope="row"><label for="channel_target">شناسه یا یوزرنیم کانال</label></th><td><input type="text" id="channel_target" name="channel_target" value="<?php echo esc_attr( $channel_target ); ?>" dir="ltr" class="regular-text" placeholder="@ahangban یا -1001234567890"><p class="description">ربات باید مدیر کانال و مجاز به ارسال پیام باشد.</p></td></tr>
                         <tr><th scope="row">انتشار خودکار</th><td><input type="hidden" name="channel_auto_post" value="0"><label><input type="checkbox" name="channel_auto_post" value="1" <?php checked( $channel_auto_post ); ?>> پس از انتشار اثر موسیقی جدید، در کانال اطلاع‌رسانی شود</label></td></tr>
+                        <tr><th scope="row">پیش‌نمایش ویس</th><td><input type="hidden" name="channel_preview_enabled" value="0"><label><input type="checkbox" name="channel_preview_enabled" value="1" <?php checked( $channel_preview_enabled ); ?>> پس از کارت کانال، نمونهٔ صوتی به‌صورت reply ارسال شود</label><p class="description">این گزینه روی انتشار خودکار و انتشار دستی اثر می‌گذارد؛ خاموش‌کردن آن پست اصلی را متوقف نمی‌کند.</p></td></tr>
+                        <tr><th scope="row"><label for="channel_preview_seconds">مدت پیش‌نمایش</label></th><td><select id="channel_preview_seconds" name="channel_preview_seconds"><?php foreach ( array( 15, 30, 45, 60 ) as $seconds ) : ?><option value="<?php echo esc_attr( $seconds ); ?>" <?php selected( $channel_preview_seconds, $seconds ); ?>><?php echo esc_html( $seconds ); ?> ثانیه</option><?php endforeach; ?></select><p class="description">از ابتدای فایل صوتی واقعی ۱۲۸ یا ۳۲۰ ساخته می‌شود.</p></td></tr>
+                        <tr><th scope="row"><label for="channel_caption_footer">متن تکمیلی کپشن کانال</label></th><td><textarea id="channel_caption_footer" name="channel_caption_footer" rows="2" maxlength="180" class="large-text" placeholder="اختیاری؛ حداکثر ۱۸۰ نویسه"><?php echo esc_textarea( $channel_caption_footer ); ?></textarea><p class="description">به کپشن انتشار دستی و خودکار افزوده می‌شود؛ متن ساده است و برای جلوگیری از HTML ناامن escape می‌شود.</p></td></tr>
                     </table>
                     <button type="submit" class="button button-primary">ذخیرهٔ تنظیمات کانال</button>
                 </form>
@@ -358,10 +515,15 @@ class AhangBan_Admin {
             </section>
 
             <section class="ab-card" aria-labelledby="ab-webhook-title">
-                <div class="ab-card-heading"><div><span class="ab-step">۰۵</span><h2 id="ab-webhook-title">وب‌هوک تلگرام</h2></div><span class="ab-muted">بدون نیاز به اجرای دائمی Python</span></div>
+                <div class="ab-card-heading"><div><span class="ab-step">۰۶</span><h2 id="ab-webhook-title">وب‌هوک تلگرام</h2></div><span class="ab-muted">بدون نیاز به اجرای دائمی Python</span></div>
                 <p>وب‌هوک پیام‌ها را روی همین WordPress دریافت می‌کند. برای ثبت وب‌هوک، توکن ربات و Secret وب‌هوک باید از محیط PHP یا اعتبارنامه‌های ذخیره‌شده در همین افزونه در دسترس باشند. API Token برای احراز هویت مسیرهای REST داده لازم است.</p>
                 <div class="ab-webhook-url"><code id="ab-webhook-url" dir="ltr"><?php echo esc_html( $webhook_url ); ?></code><button type="button" class="button button-small" data-ab-copy="ab-webhook-url">کپی نشانی</button><span class="screen-reader-text" aria-live="polite" data-ab-copy-status></span></div>
                 <div class="ab-actions">
+                    <form method="post">
+                        <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
+                        <input type="hidden" name="ahangban_action" value="check_connection">
+                        <button type="submit" class="button" <?php disabled( ! $bot_ready ); ?>>آزمون اتصال و وضعیت وب‌هوک</button>
+                    </form>
                     <form method="post">
                         <?php wp_nonce_field( 'ahangban_connector_action' ); ?>
                         <input type="hidden" name="ahangban_action" value="set_webhook">
@@ -378,11 +540,12 @@ class AhangBan_Admin {
                         <button type="submit" class="button" <?php disabled( ! $bot_ready || empty( AhangBan_Settings::get_admin_ids() ) ); ?>>ارسال پیام تست به ادمین</button>
                     </form>
                 </div>
+                <p class="description">«آزمون اتصال» فقط getMe و وضعیت وب‌هوک را می‌خواند و پیامی نمی‌فرستد؛ خطای فنی HTTP/cURL/SSL پس از آزمون در اعلان بالای همین صفحه می‌آید و توکن/Secret از متن حذف می‌شود.</p>
                 <p class="description">برای اجرای صف انتشار کانال و پیام همگانی، WP-Cron یا Cron Job هاست باید فعال باشد.</p>
             </section>
 
             <section class="ab-card" aria-labelledby="ab-api-title">
-                <div class="ab-card-heading"><div><span class="ab-step">۰۶</span><h2 id="ab-api-title">REST API و کش</h2></div><span class="ab-badge ab-badge--secure">احراز هویت Bearer</span></div>
+                <div class="ab-card-heading"><div><span class="ab-step">۰۷</span><h2 id="ab-api-title">REST API و کش</h2></div><span class="ab-badge ab-badge--secure">احراز هویت Bearer</span></div>
                 <p>مسیرهای داده و کش به <code>Authorization: Bearer &lt;TOKEN&gt;</code> نیاز دارند. <code>/health</code> عمومی و حداقلی است؛ <code>/telegram/webhook</code> هدر Secret تلگرام را می‌سنجد و وضعیت وب‌هوک فقط برای مدیر WordPress مجاز است.</p>
                 <table class="widefat striped ab-endpoint-table"><thead><tr><th>مسیر</th><th>کاربرد</th></tr></thead><tbody>
                     <tr><td><code>GET /search?q=…&amp;page=1&amp;per_page=5</code></td><td>جست‌وجوی موسیقی</td></tr>

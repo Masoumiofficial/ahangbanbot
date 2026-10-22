@@ -152,7 +152,7 @@ class AhangBan_Telegram {
             'delivery' => $delivery,
             'message_id' => $message_id,
             'preview_status' => $preview_status,
-            'preview_duration' => self::CHANNEL_PREVIEW_SECONDS,
+            'preview_duration' => AhangBan_Settings::is_channel_preview_enabled() ? AhangBan_Settings::get_channel_preview_seconds() : 0,
         );
     }
 
@@ -205,6 +205,8 @@ class AhangBan_Telegram {
         $caption .= "🎵 {$title}";
         if ( '' !== $hashtags ) { $caption .= "\n\n🎤 {$hashtags}"; }
         $caption .= "\n\n🔗 " . ( $permalink ? '<a href="' . $permalink . '">مشاهده صفحه رسمی</a>' : 'مشاهده صفحه رسمی' );
+        $footer = AhangBan_Settings::get_channel_caption_footer();
+        if ( '' !== $footer ) { $caption .= "\n\n" . self::esc( $footer ); }
         $caption .= "\n\n🆔️ @Ahangban_ir 💙";
         return self::text_limit( $caption, 900 );
     }
@@ -335,7 +337,7 @@ class AhangBan_Telegram {
         return $sources;
     }
 
-    /** Download only a real WordPress audio URL, then trim/re-encode its first 60 seconds as OGG/Opus. */
+    /** Download only a real WordPress audio URL, then encode the configured preview duration as OGG/Opus. */
     private static function create_channel_voice_preview( $song ) {
         if ( ! self::is_channel_preview_renderer_available() ) {
             return new WP_Error( 'ffmpeg_unavailable', 'هاست باید FFmpeg با encoder libopus و proc_open فعال داشته باشد.' );
@@ -371,7 +373,7 @@ class AhangBan_Telegram {
             $result = self::run_ffmpeg( array(
                 '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
                 '-i', $download['path'],
-                '-t', (string) self::CHANNEL_PREVIEW_SECONDS,
+                '-t', (string) AhangBan_Settings::get_channel_preview_seconds(),
                 '-map', '0:a:0', '-vn', '-map_metadata', '-1',
                 '-ac', '2', '-ar', '48000', '-c:a', 'libopus', '-b:a', '96k', '-application', 'audio',
                 '-f', 'ogg', $output,
@@ -403,6 +405,10 @@ class AhangBan_Telegram {
         if ( $post_id <= 0 || $message_id <= 0 || '' === $chat_id ) {
             if ( $post_id > 0 ) { update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' ); }
             return 'failed';
+        }
+        if ( ! AhangBan_Settings::is_channel_preview_enabled() ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'disabled' );
+            return 'disabled';
         }
         $song = AhangBan_Search::get_single( $post_id );
         if ( ! is_array( $song ) || empty( self::channel_preview_source_urls( $song ) ) ) {
@@ -438,6 +444,10 @@ class AhangBan_Telegram {
         $chat_id = AhangBan_Settings::normalize_channel_target( $chat_id );
         if ( $post_id <= 0 || $message_id <= 0 || '' === $chat_id ) {
             if ( $post_id > 0 ) { update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'failed' ); }
+            return;
+        }
+        if ( ! AhangBan_Settings::is_channel_preview_enabled() ) {
+            update_post_meta( $post_id, self::CHANNEL_PREVIEW_STATUS_META, 'disabled' );
             return;
         }
         $post = get_post( $post_id );
@@ -1289,31 +1299,63 @@ class AhangBan_Telegram {
 
     // ---- Helpers: branding ----
     private static function welcome_text( $name = '' ) {
+        $custom = AhangBan_Settings::get_bot_welcome_message();
+        if ( '' !== $custom ) {
+            // Custom text is plain text; escape it for Telegram HTML and substitute only a safe name.
+            $text = self::esc( $custom );
+            return str_replace( '%first_name%', self::esc( trim( (string) $name ) ), $text );
+        }
         $n = $name ? ' ' . self::esc( $name ) : '';
         return "سلام{$n} عزیز! 👋\n\nبه <b>ربات رسمی آهنگ‌بان</b> خوش آمدید 🎶\nاینجا جدیدترین آهنگ‌ها را جست‌وجو، گوش دهید و دانلود کنید — مستقیم از آرشیو واقعی سایت.\n\n✨ امکانات:\n• 🔍 جست‌وجو بر اساس نام آهنگ یا خواننده\n• 🎤 مرور همهٔ خوانندگان الفبایی\n• 🆕 جدیدترین و 🔥 محبوب‌ترین\n• 💿 کیفیت ۱۲۸/۳۲۰ + ویدیو\n• 📝 متن ترانه و آثار مرتبط\n\nنام آهنگ یا خواننده را بنویسید یا یکی از دکمه‌ها را بزنید.";
     }
 
     private static function help_text() {
-        return "ℹ️ <b>راهنمای ربات آهنگ‌بان</b>\n\n🔍 <b>جست‌وجو:</b> نام آهنگ/خواننده را تایپ کن.\n🎤 <b>فهرست خوانندگان:</b> دکمهٔ «فهرست خوانندگان».\n🆕 <b>جدیدترین / محبوب:</b> آخرین یا پرشنونده‌ترین.\n🎵 <b>کارت آهنگ:</b> کاور + کیفیت‌ها + متن + صفحه سایت.\n\n📌 دستورات:\n/start — شروع\n/search <عبارت>\n/latest — جدیدترین\n/popular — محبوب‌ترین\n/artist <نام>\n/help\n/ping\n\n🔗 https://ahangban.ir";
+        $custom = AhangBan_Settings::get_bot_help_message();
+        if ( '' !== $custom ) { return self::esc( $custom ); }
+        return "ℹ️ <b>راهنمای ربات آهنگ‌بان</b>\n\n🔍 <b>جست‌وجو:</b> نام آهنگ/خواننده را تایپ کن.\n🎤 <b>فهرست خوانندگان:</b> دکمهٔ «فهرست خوانندگان».\n🆕 <b>جدیدترین / محبوب:</b> آخرین یا پرشنونده‌ترین.\n🎵 <b>کارت آهنگ:</b> کاور + کیفیت‌ها + متن + صفحه سایت.\n\n📌 دستورات:\n/start — شروع\n/search &lt;عبارت&gt;\n/latest — جدیدترین\n/popular — محبوب‌ترین\n/artist &lt;نام&gt;\n/help\n/ping\n\n🔗 https://ahangban.ir";
     }
 
     private static function main_kb( $is_admin = false ) {
         $rows = array(
             array( array( 'text' => '🔍 جست‌وجو', 'callback_data' => 'prompt:search' ) ),
-            array( array( 'text' => '🆕 جدیدترین‌ها', 'callback_data' => 'browse:latest:1' ), array( 'text' => '🔥 محبوب‌ترین‌ها', 'callback_data' => 'browse:popular:1' ) ),
-            array( array( 'text' => '👤 جست‌وجوی خواننده', 'callback_data' => 'prompt:artist' ), array( 'text' => '🎤 همهٔ خوانندگان', 'callback_data' => 'artists:page:1' ) ),
-            array( array( 'text' => 'ℹ️ راهنما', 'callback_data' => 'help' ) ),
         );
+        $browse = array();
+        if ( AhangBan_Settings::is_menu_item_enabled( 'latest' ) ) {
+            $browse[] = array( 'text' => '🆕 جدیدترین‌ها', 'callback_data' => 'browse:latest:1' );
+        }
+        if ( AhangBan_Settings::is_menu_item_enabled( 'popular' ) ) {
+            $browse[] = array( 'text' => '🔥 محبوب‌ترین‌ها', 'callback_data' => 'browse:popular:1' );
+        }
+        if ( $browse ) { $rows[] = $browse; }
+
+        $artists = array();
+        if ( AhangBan_Settings::is_menu_item_enabled( 'artist_search' ) ) {
+            $artists[] = array( 'text' => '👤 جست‌وجوی خواننده', 'callback_data' => 'prompt:artist' );
+        }
+        if ( AhangBan_Settings::is_menu_item_enabled( 'artist_list' ) ) {
+            $artists[] = array( 'text' => '🎤 همهٔ خوانندگان', 'callback_data' => 'artists:page:1' );
+        }
+        if ( $artists ) { $rows[] = $artists; }
+        if ( AhangBan_Settings::is_menu_item_enabled( 'help' ) ) {
+            $rows[] = array( array( 'text' => 'ℹ️ راهنما', 'callback_data' => 'help' ) );
+        }
         if ( $is_admin ) { $rows[] = array( array( 'text' => '🛠 مدیریت ربات', 'callback_data' => 'admin:menu' ) ); }
         return array( 'inline_keyboard' => $rows );
     }
 
     private static function reply_kb( $is_admin = false ) {
         $keyboard = array(
-            array( array( 'text' => '🔍 جست‌وجوی آهنگ' ), array( 'text' => '👤 جست‌وجوی خواننده' ) ),
-            array( array( 'text' => '🆕 جدیدترین‌ها' ), array( 'text' => '🔥 محبوب‌ترین‌ها' ) ),
-            array( array( 'text' => '🎤 فهرست خوانندگان' ), array( 'text' => 'ℹ️ راهنما' ) ),
+            array( array( 'text' => '🔍 جست‌وجوی آهنگ' ) ),
         );
+        $browse = array();
+        if ( AhangBan_Settings::is_menu_item_enabled( 'latest' ) ) { $browse[] = array( 'text' => '🆕 جدیدترین‌ها' ); }
+        if ( AhangBan_Settings::is_menu_item_enabled( 'popular' ) ) { $browse[] = array( 'text' => '🔥 محبوب‌ترین‌ها' ); }
+        if ( $browse ) { $keyboard[] = $browse; }
+        $artists = array();
+        if ( AhangBan_Settings::is_menu_item_enabled( 'artist_search' ) ) { $artists[] = array( 'text' => '👤 جست‌وجوی خواننده' ); }
+        if ( AhangBan_Settings::is_menu_item_enabled( 'artist_list' ) ) { $artists[] = array( 'text' => '🎤 فهرست خوانندگان' ); }
+        if ( $artists ) { $keyboard[] = $artists; }
+        if ( AhangBan_Settings::is_menu_item_enabled( 'help' ) ) { $keyboard[] = array( array( 'text' => 'ℹ️ راهنما' ) ); }
         if ( $is_admin ) { $keyboard[] = array( array( 'text' => '🛠 مدیریت' ) ); }
         return array( 'keyboard' => $keyboard, 'resize_keyboard' => true, 'input_field_placeholder' => 'نام آهنگ یا خواننده را بنویسید…' );
     }
@@ -1442,7 +1484,7 @@ class AhangBan_Telegram {
             return;
         }
         $page = max( 1, min( 1000, (int) $page ) );
-        $data = AhangBan_Search::query_posts( $q, '', $page, 5 );
+        $data = AhangBan_Search::query_posts( $q, '', $page, AhangBan_Settings::get_results_per_page() );
         if ( is_wp_error( $data ) || ! is_array( $data ) ) {
             self::send( $chat, '❌ جست‌وجو موقتاً انجام نشد؛ کمی بعد دوباره امتحان کنید.', self::home_kb(), null );
             return;
@@ -1456,7 +1498,7 @@ class AhangBan_Telegram {
             return;
         }
 
-        $per_page = max( 1, (int) ( $data['per_page'] ?? 5 ) );
+        $per_page = max( 1, (int) ( $data['per_page'] ?? AhangBan_Settings::get_results_per_page() ) );
         $pages = max( 1, (int) ceil( $total / $per_page ) );
         if ( $page > $pages ) { self::send( $chat, 'این صفحه وجود ندارد؛ دوباره جست‌وجو کنید.', self::home_kb(), null ); return; }
         $header = '🔍 نتایج «<b>' . self::esc( self::text_limit( $q, 100 ) ) . '</b>» — ' . number_format_i18n( $total ) . " مورد (صفحه {$page}/{$pages})";
@@ -1491,13 +1533,13 @@ class AhangBan_Telegram {
 
     private static function handle_latest( $chat, $page ) {
         $page = max( 1, min( 1000, (int) $page ) );
-        $data = AhangBan_Search::get_latest( $page, 5 );
+        $data = AhangBan_Search::get_latest( $page, AhangBan_Settings::get_results_per_page() );
         self::send_browse( $chat, $data, $page, 'latest', '🆕 جدیدترین آثار' );
     }
 
     private static function handle_popular( $chat, $page ) {
         $page = max( 1, min( 1000, (int) $page ) );
-        $data = AhangBan_Search::get_popular( $page, 5 );
+        $data = AhangBan_Search::get_popular( $page, AhangBan_Settings::get_results_per_page() );
         self::send_browse( $chat, $data, $page, 'popular', '🔥 محبوب‌ترین‌های ماه' );
     }
 
@@ -1505,7 +1547,7 @@ class AhangBan_Telegram {
         if ( is_wp_error( $data ) || ! is_array( $data ) ) { self::send( $chat, '❌ فهرست آثار فعلاً در دسترس نیست.', self::home_kb(), null ); return; }
         $results = $data['results'] ?? array();
         $total = (int) ( $data['total'] ?? count( $results ) );
-        $per_page = max( 1, (int) ( $data['per_page'] ?? 5 ) );
+        $per_page = max( 1, (int) ( $data['per_page'] ?? AhangBan_Settings::get_results_per_page() ) );
         $pages = max( 1, (int) ceil( $total / $per_page ) );
         if ( empty( $results ) ) { self::send( $chat, 'فعلاً اثری برای نمایش پیدا نشد.', self::home_kb() ); return; }
         if ( $page > $pages ) { self::send( $chat, 'این صفحه وجود ندارد.', self::home_kb(), null ); return; }
@@ -1539,14 +1581,14 @@ class AhangBan_Telegram {
 
     private static function handle_artists_list( $chat, $page, $letter = '', $q = '' ) {
         $page = max( 1, min( 1000, (int) $page ) );
-        $data = AhangBan_Search::get_artists( array( 'q' => $q, 'letter' => $letter, 'sort' => 'name', 'page' => $page, 'per_page' => 10 ) );
+        $data = AhangBan_Search::get_artists( array( 'q' => $q, 'letter' => $letter, 'sort' => 'name', 'page' => $page, 'per_page' => AhangBan_Settings::get_artists_per_page() ) );
         if ( is_wp_error( $data ) || ! is_array( $data ) ) {
             self::send( $chat, '❌ فهرست خوانندگان فعلاً در دسترس نیست.', self::home_kb(), null );
             return;
         }
         $results = $data['results'] ?? array();
         $total = (int) ( $data['total'] ?? 0 );
-        $per_page = max( 1, (int) ( $data['per_page'] ?? 10 ) );
+        $per_page = max( 1, (int) ( $data['per_page'] ?? AhangBan_Settings::get_artists_per_page() ) );
         $pages = max( 1, (int) ceil( $total / $per_page ) );
         if ( empty( $results ) ) { self::send( $chat, '😕 خواننده‌ای برای این فیلتر پیدا نشد.', self::home_kb() ); return; }
         $header = '🎤 <b>فهرست خوانندگان</b> — ' . number_format_i18n( $total ) . ' هنرمند';
@@ -1590,14 +1632,14 @@ class AhangBan_Telegram {
             self::send( $chat, '⚠️ نام خواننده باید بین ۲ تا ۱۰۰ نویسه باشد.', self::home_kb(), null );
             return;
         }
-        $list = AhangBan_Search::get_artists( array( 'q' => $name, 'page' => 1, 'per_page' => 8, 'sort' => 'name' ) );
+        $list = AhangBan_Search::get_artists( array( 'q' => $name, 'page' => 1, 'per_page' => AhangBan_Settings::get_artists_per_page(), 'sort' => 'name' ) );
         if ( is_wp_error( $list ) || empty( $list['results'] ) ) {
             self::send( $chat, '😕 خواننده‌ای با این نام پیدا نشد؛ نام دیگری را امتحان کنید.', self::home_kb() );
             return;
         }
         $rows = array();
         $lines = array( '🎤 <b>خوانندگان پیدا‌شده برای «' . self::esc( self::text_limit( $name, 100 ) ) . '»</b>', '' );
-        foreach ( array_slice( $list['results'], 0, 8 ) as $artist ) {
+        foreach ( array_slice( $list['results'], 0, AhangBan_Settings::get_artists_per_page() ) as $artist ) {
             $term_id = (int) ( $artist['term_id'] ?? 0 );
             $artist_name = self::text_limit( $artist['name'] ?? 'هنرمند', 55 );
             $count = (int) ( $artist['count'] ?? 0 );
@@ -1957,14 +1999,14 @@ class AhangBan_Telegram {
             $token = wp_generate_password( 8, false, false );
             set_transient( 'ahangban_channel_publish_query_' . $token, $query, 10 * MINUTE_IN_SECONDS );
         }
-        $data = AhangBan_Search::query_posts( $query, '', $page, 10 );
+        $data = AhangBan_Search::query_posts( $query, '', $page, AhangBan_Settings::get_results_per_page() );
         if ( is_wp_error( $data ) || ! is_array( $data ) ) {
             self::send( $chat, '❌ جست‌وجوی آثار فعلاً انجام نشد؛ کمی بعد دوباره امتحان کنید.', self::admin_kb(), null );
             return;
         }
         $results = $data['results'] ?? array();
         $total = (int) ( $data['total'] ?? 0 );
-        $per_page = max( 1, (int) ( $data['per_page'] ?? 10 ) );
+        $per_page = max( 1, (int) ( $data['per_page'] ?? AhangBan_Settings::get_results_per_page() ) );
         $pages = max( 1, (int) ceil( $total / $per_page ) );
         if ( empty( $results ) ) {
             self::send( $chat, '😕 اثری با این عبارت پیدا نشد. عنوان دقیق‌تر یا شناسهٔ پست را امتحان کنید.', self::admin_kb() );
@@ -2006,7 +2048,10 @@ class AhangBan_Telegram {
                 array( 'text' => 'لغو', 'callback_data' => 'admin:channel_publish_cancel:' . $post_id ),
             ),
         ) );
-        $preview = "📣 <b>پیش‌نمایش انتشار در کانال</b>\n\n" . self::channel_caption( $song ) . "\n\nاین ارسال مستقل از انتشار خودکار است؛ فقط با تأیید شما منتشر می‌شود. پس از انتشار، نمونهٔ ویس ۶۰ ثانیه‌ای در پاسخ به پست قرار می‌گیرد.";
+        $preview_note = AhangBan_Settings::is_channel_preview_enabled()
+            ? 'پس از انتشار، پیش‌نمایش ویس ' . AhangBan_Settings::get_channel_preview_seconds() . ' ثانیه‌ای در پاسخ به پست قرار می‌گیرد.'
+            : 'پیش‌نمایش ویس طبق تنظیمات پیشخوان خاموش است.';
+        $preview = "📣 <b>پیش‌نمایش انتشار در کانال</b>\n\n" . self::channel_caption( $song ) . "\n\nاین ارسال مستقل از انتشار خودکار است؛ فقط با تأیید شما منتشر می‌شود. " . $preview_note;
         self::send( $chat, $preview, $keyboard );
     }
 
@@ -2034,7 +2079,10 @@ class AhangBan_Telegram {
         $message = '✅ پست <code>' . (int) $post_id . '</code> در کانال منتشر شد.';
         if ( ! empty( $result['message_id'] ) ) { $message .= "\nشناسهٔ پیام کانال: <code>" . (int) $result['message_id'] . '</code>'; }
         if ( 'queued' === ( $result['preview_status'] ?? '' ) ) {
-            $message .= "\n🎧 ویس ۶۰ ثانیه‌ای به صف WP-Cron افزوده شد و به‌صورت reply ارسال می‌شود.";
+            $duration = (int) ( $result['preview_duration'] ?? AhangBan_Settings::get_channel_preview_seconds() );
+            $message .= "\n🎧 ویس {$duration} ثانیه‌ای به صف WP-Cron افزوده شد و به‌صورت reply ارسال می‌شود.";
+        } elseif ( 'disabled' === ( $result['preview_status'] ?? '' ) ) {
+            $message .= "\nℹ️ ارسال پیش‌نمایش ویس از تنظیمات پیشخوان خاموش است.";
         } elseif ( 'unavailable' === ( $result['preview_status'] ?? '' ) ) {
             $message .= "\n⚠️ پست منتشر شد، اما FFmpeg/Opus یا اجرای proc_open روی هاست در دسترس نیست؛ ویس ارسال نشد.";
         } elseif ( 'failed' === ( $result['preview_status'] ?? '' ) ) {

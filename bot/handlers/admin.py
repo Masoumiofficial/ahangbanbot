@@ -128,7 +128,7 @@ def _channel_publish_preview(song: dict) -> str:
         "🆔️ @Ahangban_ir 💙",
         "",
         f"شناسهٔ پست: <code>{post_id}</code>",
-        "پس از انتشار، ویس ۶۰ ثانیه‌ای OGG/Opus با دو دکمهٔ شیشه‌ای به‌صورت reply می‌آید؛ ارسال به WP-Cron وابسته است.",
+        "پس از انتشار، اگر پیش‌نمایش ویس در تنظیمات WordPress روشن باشد، Voice Note با مدت انتخاب‌شده به‌صورت reply و از مسیر WP-Cron ارسال می‌شود.",
         "این ارسال به کانال تنظیم‌شده در WordPress می‌رود و به روشن‌بودن انتشار خودکار وابسته نیست.",
     ])
     return "\n".join(lines)
@@ -262,7 +262,10 @@ async def admin_channel_publish_confirm_callback(update: Update, context: Contex
             message += f"\nشناسهٔ پیام کانال: <code>{message_id}</code>"
         preview_status = result.get("preview_status")
         if preview_status == "queued":
-            message += "\n🎧 ویس ۶۰ ثانیه‌ای به صف WP-Cron افزوده شد و به‌صورت reply ارسال می‌شود."
+            preview_duration = int(result.get("preview_duration") or 60)
+            message += f"\n🎧 ویس {preview_duration} ثانیه‌ای به صف WP-Cron افزوده شد و به‌صورت reply ارسال می‌شود."
+        elif preview_status == "disabled":
+            message += "\nℹ️ ارسال پیش‌نمایش ویس از تنظیمات پیشخوان خاموش است."
         elif preview_status == "unavailable":
             message += "\n⚠️ پست منتشر شد، اما FFmpeg/Opus یا اجرای proc_open روی هاست در دسترس نیست؛ ویس ارسال نشد."
         elif preview_status == "failed":
