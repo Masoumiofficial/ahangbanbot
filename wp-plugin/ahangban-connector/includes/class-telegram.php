@@ -7,7 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) { exit; }
  */
 class AhangBan_Telegram {
     const NS = 'ahangban/v1';
-    const SCHEMA_VERSION = '3';
+    const SCHEMA_VERSION = '4';
     const MAX_MEDIA_BYTES = 51380224; // Conservative 49 MiB under Telegram Bot API upload limits.
     const CHANNEL_PREVIEW_SECONDS = 60;
     const CHANNEL_PREVIEW_STATUS_META = '_ahangban_tg_channel_preview_status';
@@ -21,6 +21,7 @@ class AhangBan_Telegram {
         add_action( 'wp_after_insert_post', array( __CLASS__, 'queue_channel_announcement_after_insert' ), 10, 4 );
         add_action( 'ahangban_bot_send_channel_announcement', array( __CLASS__, 'send_channel_announcement' ), 10, 1 );
         add_action( 'ahangban_bot_send_channel_preview', array( __CLASS__, 'process_channel_preview' ), 10, 3 );
+        add_action( 'ahangban_bot_process_update', array( __CLASS__, 'process_queued_update' ), 10, 1 );
     }
 
     /** Only classify verified music records; never broadcast an arbitrary WordPress post. */
@@ -615,11 +616,14 @@ class AhangBan_Telegram {
         ) {$charset};";
         $sql_updates = "CREATE TABLE {$updates} (
             update_id bigint(20) unsigned NOT NULL,
-            status varchar(16) NOT NULL DEFAULT 'processing',
+            status varchar(16) NOT NULL DEFAULT 'queued',
             processed_at bigint(20) unsigned NOT NULL DEFAULT 0,
             locked_until bigint(20) unsigned NOT NULL DEFAULT 0,
+            payload longtext NULL,
+            last_error text NULL,
             PRIMARY KEY  (update_id),
-            KEY processed_at (processed_at)
+            KEY processed_at (processed_at),
+            KEY status_locked (status,locked_until)
         ) {$charset};";
         dbDelta( $sql_users );
         dbDelta( $sql_broadcasts );
@@ -627,7 +631,9 @@ class AhangBan_Telegram {
         $users_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $users ) ) );
         $broadcasts_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $broadcasts ) ) );
         $updates_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $updates ) ) );
-        if ( $users === $users_exists && $broadcasts === $broadcasts_exists && $updates === $updates_exists ) {
+        $payload_column = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$updates} LIKE %s", 'payload' ) );
+        $error_column = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$updates} LIKE %s", 'last_error' ) );
+        if ( $users === $users_exists && $broadcasts === $broadcasts_exists && $updates === $updates_exists && 'payload' === $payload_column && 'last_error' === $error_column ) {
             update_option( 'ahangban_telegram_schema', self::SCHEMA_VERSION, false );
         }
     }
@@ -649,41 +655,180 @@ class AhangBan_Telegram {
         return current_user_can( 'manage_options' );
     }
 
-    /** Claim update_id atomically with a primary-key insert, so concurrent retries cannot double-send. */
-    private static function claim_update( $update_id ) {
+    /** Persist the Telegram payload before acknowledging it; the primary key makes retries idempotent. */
+    private static function enqueue_update( $update_id, $payload ) {
         global $wpdb;
         $table = self::updates_table();
         $now = time();
         if ( ! get_transient( 'ahangban_tg_update_cleanup' ) ) {
-            $wpdb->query( $wpdb->prepare( "DELETE FROM {$table} WHERE processed_at < %d AND (status = 'done' OR locked_until < %d)", $now - ( 2 * DAY_IN_SECONDS ), $now ) );
+            $retention_cutoff = $now - ( 2 * DAY_IN_SECONDS );
+            $wpdb->query( $wpdb->prepare(
+                "UPDATE {$table} SET status = 'failed',processed_at = %d,locked_until = 0,payload = NULL,last_error = %s WHERE processed_at < %d AND status IN ('queued','processing') AND locked_until < %d",
+                $now,
+                'درخواست وب‌هوک بیش از دو روز در صف ماند و منقضی شد.',
+                $retention_cutoff,
+                $now
+            ) );
+            $wpdb->query( $wpdb->prepare(
+                "DELETE FROM {$table} WHERE processed_at < %d AND status IN ('done','failed')",
+                $retention_cutoff
+            ) );
             set_transient( 'ahangban_tg_update_cleanup', 1, DAY_IN_SECONDS );
         }
 
         $inserted = $wpdb->query( $wpdb->prepare(
-            "INSERT IGNORE INTO {$table} (update_id,status,processed_at,locked_until) VALUES (%d,'processing',%d,%d)",
-            (int) $update_id, $now, $now + 120
+            "INSERT IGNORE INTO {$table} (update_id,status,processed_at,locked_until,payload,last_error) VALUES (%d,'queued',%d,0,%s,NULL)",
+            (int) $update_id,
+            $now,
+            (string) $payload
         ) );
-        if ( 1 === (int) $inserted ) { return true; }
-        if ( false === $inserted ) { return new WP_Error( 'dedupe_unavailable', 'ذخیرهٔ شناسهٔ درخواست انجام نشد.', array( 'status' => 503 ) ); }
+        if ( false === $inserted ) {
+            return new WP_Error( 'update_queue_unavailable', 'ذخیرهٔ امن درخواست وب‌هوک انجام نشد.', array( 'status' => 503 ) );
+        }
+        if ( 1 === (int) $inserted ) { return array( 'status' => 'queued', 'run_at' => $now ); }
 
-        $reclaimed = $wpdb->query( $wpdb->prepare(
-            "UPDATE {$table} SET status = 'processing', processed_at = %d, locked_until = %d WHERE update_id = %d AND status = 'processing' AND locked_until < %d",
-            $now, $now + 120, (int) $update_id, $now
-        ) );
-        if ( 1 === (int) $reclaimed ) { return true; }
-        $existing = $wpdb->get_var( $wpdb->prepare( "SELECT update_id FROM {$table} WHERE update_id = %d", (int) $update_id ) );
-        if ( null !== $existing ) { return false; }
-        return new WP_Error( 'dedupe_unavailable', 'بررسی تکراری‌بودن درخواست انجام نشد.', array( 'status' => 503 ) );
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT status,locked_until,payload FROM {$table} WHERE update_id = %d",
+            (int) $update_id
+        ), ARRAY_A );
+        if ( ! is_array( $row ) ) {
+            return new WP_Error( 'update_queue_unavailable', 'وضعیت درخواست وب‌هوک از پایگاه داده خوانده نشد.', array( 'status' => 503 ) );
+        }
+        $status = (string) ( $row['status'] ?? '' );
+        if ( in_array( $status, array( 'done', 'failed' ), true ) ) { return array( 'status' => 'duplicate', 'run_at' => 0 ); }
+
+        // Upgrade an in-flight v1.6.2 row whose older schema did not retain the update body.
+        if ( empty( $row['payload'] ) ) {
+            $updated = $wpdb->query( $wpdb->prepare(
+                "UPDATE {$table} SET payload = %s WHERE update_id = %d AND (payload IS NULL OR payload = '')",
+                (string) $payload,
+                (int) $update_id
+            ) );
+            if ( false === $updated ) {
+                return new WP_Error( 'update_queue_unavailable', 'ذخیرهٔ متن درخواست وب‌هوک انجام نشد.', array( 'status' => 503 ) );
+            }
+        }
+
+        $run_at = 'processing' === $status
+            ? max( $now + 1, (int) ( $row['locked_until'] ?? 0 ) + 1 )
+            : $now;
+        return array( 'status' => in_array( $status, array( 'queued', 'processing' ), true ) ? $status : 'queued', 'run_at' => $run_at );
+    }
+
+    /** Schedule the worker without making Telegram wait for bot/API work to finish. */
+    private static function schedule_update_worker( $update_id, $run_at = 0 ) {
+        $hook = 'ahangban_bot_process_update';
+        $args = array( (int) $update_id );
+        if ( ! wp_next_scheduled( $hook, $args ) ) {
+            $scheduled = wp_schedule_single_event( max( time(), (int) $run_at ), $hook, $args, true );
+            if ( is_wp_error( $scheduled ) || ( false === $scheduled && ! wp_next_scheduled( $hook, $args ) ) ) {
+                return false;
+            }
+        }
+        $doing_cron = function_exists( 'wp_doing_cron' ) ? wp_doing_cron() : ( defined( 'DOING_CRON' ) && DOING_CRON );
+        if ( ! $doing_cron && function_exists( 'spawn_cron' ) ) { spawn_cron(); }
+        return true;
     }
 
     private static function complete_update( $update_id ) {
         global $wpdb;
-        $wpdb->update( self::updates_table(), array( 'status' => 'done', 'processed_at' => time(), 'locked_until' => 0 ), array( 'update_id' => (int) $update_id ), array( '%s', '%d', '%d' ), array( '%d' ) );
+        $wpdb->update(
+            self::updates_table(),
+            array( 'status' => 'done', 'processed_at' => time(), 'locked_until' => 0, 'last_error' => null, 'payload' => null ),
+            array( 'update_id' => (int) $update_id ),
+            array( '%s', '%d', '%d', '%s', '%s' ),
+            array( '%d' )
+        );
     }
 
-    private static function release_update( $update_id ) {
+    private static function fail_update( $update_id, $message ) {
         global $wpdb;
-        $wpdb->delete( self::updates_table(), array( 'update_id' => (int) $update_id, 'status' => 'processing' ), array( '%d', '%s' ) );
+        $message = sanitize_text_field( (string) $message );
+        $token = AhangBan_Settings::get_bot_token();
+        $secret = AhangBan_Settings::get_bot_secret();
+        if ( '' !== $token ) { $message = str_replace( $token, '[redacted]', $message ); }
+        if ( '' !== $secret ) { $message = str_replace( $secret, '[redacted]', $message ); }
+        $message = function_exists( 'mb_substr' ) ? mb_substr( $message, 0, 500, 'UTF-8' ) : substr( $message, 0, 500 );
+        $wpdb->update(
+            self::updates_table(),
+            array( 'status' => 'failed', 'processed_at' => time(), 'locked_until' => 0, 'last_error' => $message, 'payload' => null ),
+            array( 'update_id' => (int) $update_id ),
+            array( '%s', '%d', '%d', '%s', '%s' ),
+            array( '%d' )
+        );
+        error_log( '[AhangBan Telegram] queued update ' . (int) $update_id . ' failed: ' . $message );
+    }
+
+    /** Run one durable update off the webhook request; ambiguous expired jobs are never replayed. */
+    public static function process_queued_update( $update_id ) {
+        global $wpdb;
+        $update_id = (int) $update_id;
+        if ( $update_id < 0 ) { return; }
+        $table = self::updates_table();
+        $row = $wpdb->get_row( $wpdb->prepare(
+            "SELECT status,locked_until FROM {$table} WHERE update_id = %d",
+            $update_id
+        ), ARRAY_A );
+        if ( ! is_array( $row ) || in_array( (string) ( $row['status'] ?? '' ), array( 'done', 'failed' ), true ) ) { return; }
+
+        $now = time();
+        if ( 'processing' === (string) $row['status'] ) {
+            if ( (int) $row['locked_until'] >= $now ) {
+                self::schedule_update_worker( $update_id, (int) $row['locked_until'] + 1 );
+            } else {
+                self::fail_update( $update_id, 'مهلت worker تمام شد؛ نتیجهٔ ارسال نامشخص است و برای جلوگیری از پیام تکراری خودکار دوباره اجرا نشد.' );
+            }
+            return;
+        }
+        if ( 'queued' !== (string) $row['status'] ) { return; }
+
+        $lock_until = $now + 300;
+        $claimed = $wpdb->query( $wpdb->prepare(
+            "UPDATE {$table} SET status = 'processing',processed_at = %d,locked_until = %d,last_error = NULL WHERE update_id = %d AND status = 'queued'",
+            $now,
+            $lock_until,
+            $update_id
+        ) );
+        if ( 1 !== (int) $claimed ) { return; }
+        // If PHP is terminated mid-job, leave a watchdog event to reclaim the expired lock.
+        if ( ! self::schedule_update_worker( $update_id, $lock_until + 1 ) ) {
+            error_log( '[AhangBan Telegram] Could not schedule queued update recovery for ' . $update_id . '.' );
+        }
+
+        $payload = $wpdb->get_var( $wpdb->prepare( "SELECT payload FROM {$table} WHERE update_id = %d", $update_id ) );
+        $update = is_string( $payload ) ? json_decode( $payload, true ) : null;
+        if ( ! is_array( $update ) || (int) ( $update['update_id'] ?? -1 ) !== $update_id ) {
+            self::fail_update( $update_id, 'متن ذخیره‌شدهٔ درخواست وب‌هوک نامعتبر یا خالی است.' );
+            return;
+        }
+
+        try {
+            self::process_update( $update );
+            self::complete_update( $update_id );
+        } catch ( Throwable $e ) {
+            self::fail_update( $update_id, $e->getMessage() );
+        }
+    }
+
+    /** Read-only local queue diagnostics for administrators. */
+    public static function get_local_queue_status() {
+        global $wpdb;
+        $table = self::updates_table();
+        $send_error = get_transient( 'ahangban_tg_api_error_sendMessage' );
+        $send_error = is_array( $send_error ) ? $send_error : array();
+        $exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
+        if ( self::SCHEMA_VERSION !== (string) get_option( 'ahangban_telegram_schema', '' ) || $table !== $exists ) {
+            return array( 'available' => false, 'queued' => 0, 'processing' => 0, 'failed' => 0, 'oldest_active_at' => 0, 'last_error' => '', 'last_send_error' => $send_error );
+        }
+        $status = array( 'available' => true, 'queued' => 0, 'processing' => 0, 'failed' => 0, 'oldest_active_at' => 0, 'last_error' => '', 'last_send_error' => $send_error );
+        $rows = $wpdb->get_results( "SELECT status,COUNT(*) AS total FROM {$table} GROUP BY status", ARRAY_A );
+        foreach ( (array) $rows as $row ) {
+            $key = (string) ( $row['status'] ?? '' );
+            if ( array_key_exists( $key, $status ) ) { $status[ $key ] = (int) ( $row['total'] ?? 0 ); }
+        }
+        $status['oldest_active_at'] = (int) $wpdb->get_var( "SELECT MIN(processed_at) FROM {$table} WHERE status IN ('queued','processing')" );
+        $status['last_error'] = (string) $wpdb->get_var( "SELECT last_error FROM {$table} WHERE last_error IS NOT NULL AND last_error <> '' ORDER BY processed_at DESC LIMIT 1" );
+        return $status;
     }
 
     public static function handle_webhook( WP_REST_Request $req ) {
@@ -715,26 +860,22 @@ class AhangBan_Telegram {
         if ( ! is_array( $update ) || empty( $update ) || false === $validated_update_id ) {
             return new WP_Error( 'invalid_update', 'ساختار به‌روزرسانی تلگرام نامعتبر است.', array( 'status' => 400 ) );
         }
-
-        // Atomic database claim prevents duplicate replies during concurrent Telegram retries.
-        $update_id = (int) $validated_update_id;
-        $claimed = self::claim_update( $update_id );
-        if ( is_wp_error( $claimed ) ) { return $claimed; }
-        if ( ! $claimed ) { return rest_ensure_response( array( 'ok' => true, 'duplicate' => true ) ); }
-
-        try {
-            self::process_update( $update );
-            self::complete_update( $update_id );
-        } catch ( Throwable $e ) {
-            self::release_update( $update_id );
-            $log_message = sanitize_text_field( $e->getMessage() );
-            $bot_token = AhangBan_Settings::get_bot_token();
-            if ( '' !== $bot_token ) { $log_message = str_replace( $bot_token, '[redacted]', $log_message ); }
-            error_log( '[AhangBan Telegram] update processing failed: ' . $log_message );
-            return new WP_Error( 'update_failed', 'پردازش درخواست موقتاً ناموفق بود.', array( 'status' => 500 ) );
+        $payload = wp_json_encode( $update, JSON_UNESCAPED_UNICODE );
+        if ( ! is_string( $payload ) || '' === $payload ) {
+            return new WP_Error( 'invalid_update', 'ذخیرهٔ ساختار درخواست Telegram ممکن نیست.', array( 'status' => 400 ) );
         }
 
-        return rest_ensure_response( array( 'ok' => true ) );
+        // Persist first, then return 200 immediately; Telegram should not wait for Telegram API calls.
+        $update_id = (int) $validated_update_id;
+        $queued = self::enqueue_update( $update_id, $payload );
+        if ( is_wp_error( $queued ) ) { return $queued; }
+        if ( 'duplicate' === ( $queued['status'] ?? '' ) ) {
+            return rest_ensure_response( array( 'ok' => true, 'duplicate' => true ) );
+        }
+        if ( ! self::schedule_update_worker( $update_id, (int) ( $queued['run_at'] ?? 0 ) ) ) {
+            return new WP_Error( 'update_queue_unavailable', 'درخواست ذخیره شد اما اجرای صف WP-Cron زمان‌بندی نشد.', array( 'status' => 503 ) );
+        }
+        return rest_ensure_response( array( 'ok' => true, 'queued' => true ) );
     }
 
     public static function webhook_status( $req ) {
@@ -856,6 +997,20 @@ class AhangBan_Telegram {
     }
 
     // ---------- Telegram API helpers ----------
+    private static function remember_api_error( $method, $message ) {
+        $token = trim( (string) AhangBan_Settings::get_bot_token() );
+        $secret = trim( (string) AhangBan_Settings::get_bot_secret() );
+        $message = sanitize_text_field( (string) $message );
+        if ( '' !== $token ) { $message = str_replace( $token, '[redacted]', $message ); }
+        if ( '' !== $secret ) { $message = str_replace( $secret, '[redacted]', $message ); }
+        $message = function_exists( 'mb_substr' ) ? mb_substr( $message, 0, 500, 'UTF-8' ) : substr( $message, 0, 500 );
+        set_transient( 'ahangban_tg_api_error_' . sanitize_key( $method ), array(
+            'method' => sanitize_key( $method ),
+            'message' => $message,
+            'time' => time(),
+        ), DAY_IN_SECONDS );
+    }
+
     private static function api_call( $method, $params = array(), $timeout = 12 ) {
         $token = trim( (string) AhangBan_Settings::get_bot_token() );
         if ( '' === $token ) { return new WP_Error( 'no_token', 'توکن تنظیم نشده' ); }
@@ -878,6 +1033,7 @@ class AhangBan_Telegram {
         $resp = wp_remote_post( $url, $request_args );
         if ( is_wp_error( $resp ) ) {
             $transport_error = str_replace( $token, '[redacted]', sanitize_text_field( $resp->get_error_message() ) );
+            self::remember_api_error( $method, $transport_error );
             error_log( '[AhangBan Telegram] API transport failed for ' . sanitize_key( $method ) . ': ' . $transport_error );
             return $resp;
         }
@@ -895,19 +1051,24 @@ class AhangBan_Telegram {
             }
         }
         if ( ! is_array( $json ) ) {
+            $detail = 'پاسخ نامعتبر از تلگرام دریافت شد (HTTP ' . $code . ').';
+            self::remember_api_error( $method, $detail );
             error_log( '[AhangBan Telegram] Invalid API response for ' . sanitize_key( $method ) . ' (HTTP ' . $code . ').' );
-            return new WP_Error( 'telegram_bad_response', 'پاسخ نامعتبر از تلگرام دریافت شد.' );
+            return new WP_Error( 'telegram_bad_response', $detail );
         }
         if ( $code >= 400 || ( isset( $json['ok'] ) && ! $json['ok'] ) ) {
             $description = isset( $json['description'] ) ? sanitize_text_field( $json['description'] ) : 'unknown error';
             $description = str_replace( $token, '[redacted]', $description );
+            self::remember_api_error( $method, 'HTTP ' . $code . ': ' . $description );
             error_log( '[AhangBan Telegram] API ' . sanitize_key( $method ) . ' failed (HTTP ' . $code . '): ' . $description );
         }
         // A proxy/5xx response can be ambiguous: Telegram may have accepted the update before
         // the connection failed. Callers must not automatically send the same item again.
         if ( $code >= 500 || ( $code >= 300 && $code < 400 ) ) {
+            self::remember_api_error( $method, 'HTTP ' . $code . ': پاسخ مبهم از Telegram.' );
             return new WP_Error( 'telegram_ambiguous_response', 'پاسخ تلگرام نامطمئن است؛ برای جلوگیری از ارسال تکراری دوباره تلاش نشد.' );
         }
+        if ( ! empty( $json['ok'] ) ) { delete_transient( 'ahangban_tg_api_error_' . sanitize_key( $method ) ); }
         return $json;
     }
 

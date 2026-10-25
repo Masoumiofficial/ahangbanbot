@@ -4,7 +4,7 @@ Tags: telegram, api, music, ahangban
 Requires at least: 5.9
 Tested up to: 6.6
 Requires PHP: 7.4
-Stable tag: 1.6.2
+Stable tag: 1.6.3
 License: GPLv2 or later
 
 لایهٔ امن اتصال ربات تلگرام آهنگ‌بان به داده‌های واقعی وردپرس، همراه با وب‌هوک داخلی برای هاست اشتراکی.
@@ -51,11 +51,17 @@ License: GPLv2 or later
 * API با Bearer token، rate limit اتمی در دیتابیس موجود، مقایسهٔ ثابت‌زمانی و IP پراکسیِ صریحاً مورداعتماد محافظت می‌شود.
 * CORS wildcard حذف شده است؛ کلاینت Python سروربه‌سرور است و نیازی به CORS ندارد.
 * تماس با Telegram روی HTTPS انجام می‌شود، SSL verify روشن و redirect غیرفعال است.
-* وب‌هوک POST هدر `X-Telegram-Bot-Api-Secret-Token` را اجباری بررسی می‌کند؛ update تکراری یک‌بار پردازش می‌شود.
+* وب‌هوک POST هدر `X-Telegram-Bot-Api-Secret-Token` را اجباری بررسی می‌کند؛ payload در دیتابیس WordPress ذخیره و سریع تأیید می‌شود، سپس با WP-Cron پردازش می‌شود؛ update تکراری دوباره پاسخ نمی‌گیرد.
+* صفحهٔ اتصال، صف محلی webhook/WP-Cron و آخرین خطای `sendMessage` را جدا از صف Telegram نمایش می‌دهد تا timeout ورودی از خطای ارسال خروجی تفکیک شود.
 * URL رسانه باید HTTPS و مقصد عمومی باشد؛ مقصد محلی/خصوصی و redirect ناامن رد می‌شوند؛ اندازهٔ فایل محدود است.
 * کانال و Health عمومی جزئیات نسخه/محیط هاست را افشا نمی‌کنند.
 
 == تغییرات ==
+= 1.6.3 =
+* پردازش وب‌هوک Telegram از درخواست ورودی جدا شد: payload معتبر در دیتابیس موجود WordPress ذخیره و پاسخ سریع داده می‌شود؛ worker با WP-Cron و کلید یکتای update_id آن را پردازش می‌کند.
+* پاسخ تکراری برای updateهای done/failed جلوگیری می‌شود؛ payload پس از پردازش پاک می‌شود و درخواست‌های معطل بیش از دو روز منقضی می‌شوند.
+* صفحهٔ اتصال اکنون صف Telegram را از صف محلی WordPress جدا نشان می‌دهد و آخرین خطای sendMessage را بدون افشای Token نمایش می‌دهد.
+
 = 1.6.2 =
 * پاسخ endpoint انتشار دستی، مقصد واقعی کانال و URL کیفیت‌های صوتی معتبر همان پست را در وضعیت unavailable/failed به کلاینت Python برمی‌گرداند تا fallback فقط پس از تأیید ارسال پست اجرا شود.
 * اگر وضعیت WordPress برابر queued باشد، کلاینت Python عمداً Voice Note دیگری نمی‌فرستد؛ منطق webhook مستقل می‌ماند.
