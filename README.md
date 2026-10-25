@@ -1,15 +1,16 @@
-# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.6.2
+# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.6.3
 
 > **برند:** آهنگ‌بان (AhangBan) — https://ahangban.ir  
 > **زبان:** فارسی · **جهت:** RTL · **منبع حقیقت آثار/هنرمندان:** دیتابیس وردپرس آهنگ‌بان
 > **ترجیحات پسند و دنبال‌کردن:** SQLite محلی ربات (بدون کپی دیتابیس وردپرس)
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
 
-> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.6.2
-> - **[دانلود مستقیم افزونه v1.6.2 از GitHub](https://raw.githubusercontent.com/Masoumiofficial/ahangbanbot/v1.6.2/releases/ahangban-connector-1.6.2.zip)**
+> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.6.3
+> - **[دانلود ZIP افزونه v1.6.3](releases/ahangban-connector-1.6.3.zip)**
 > - در **انتشار دستی کانال از Python polling**، اگر WordPress وضعیت Voice Note را `unavailable` یا `failed` برگرداند، ربات یک‌بار با FFmpeg/libopus خودش تبدیل و ارسال می‌کند؛ وضعیت `queued` هرگز fallback نمی‌شود تا ویس تکراری ساخته نشود.
 > - API انتشار دستی، مقصد کانال و URLهای واقعی کیفیت‌های صوتی همان پست را فقط برای fallback کنترل‌شده برمی‌گرداند؛ webhook PHP مستقل می‌ماند.
 > - در تصویر Docker ربات FFmpeg نصب است؛ در استقرار غیر Docker، FFmpeg دارای libopus باید در محیط Python فراهم شود. نبود آن با پیام صریح گزارش می‌شود و موفقیت جعل نمی‌شود.
+> - در webhook افزونهٔ v1.6.3، update معتبر اول در صف محلی ذخیره و سریع تأیید می‌شود؛ پردازش بعدی با WP-Cron است تا درخواست کند Telegram timeout نشود. آمار صف Telegram و صف داخلی در پیشخوان جدا نمایش داده می‌شود.
 > - لایک/برداشتن لایک و فهرست پسندیده‌ها، دنبال‌کردن/لغو دنبال‌کردن هنرمند بر اساس `term_id` واقعی و نمایش صفحه‌بندی‌شدهٔ ID عددی کاربران/وضعیت مسدودی برای ادمین افزوده شد.
 > - موارد نسخه‌های قبلی حفظ‌اند: HTTPS/TLS، اعتبارسنجی سخت‌گیرانهٔ Token، پیام شروع/راهنما، کپشن کانال و Voice Note تنظیم‌پذیر.
 > - اگر هاست متغیر محیطی PHP را پشتیبانی نمی‌کند، اعتبارنامه‌ها را از فرم مدیر افزونه وارد کنید؛ مقدارها در صفحه نمایش داده نمی‌شوند.
@@ -297,7 +298,7 @@ pip install -r bot/requirements-dev.txt
 pytest bot/tests/ -v
 ```
 
-تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پسند/دنبال‌کردن، فهرست کاربران ادمین، تبدیل/ارسال Voice Note mock و عدم fallback در وضعیت `queued` هستند. در 2026-10-23، **۶۳ تست Python موفق** شد؛ `compileall`، `git diff --check`، `node --check`، Ruff منتخب و parse ایستای ۸ فایل PHP نیز موفق‌اند. اتصال زندهٔ WordPress/Telegram/کانال و اجرای واقعی FFmpeg روی هاست از این محیط قابل اثبات نیست؛ گزارش پذیرش: [`docs/09-TEST-REPORT-v1.6.2.md`](docs/09-TEST-REPORT-v1.6.2.md).
+تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پسند/دنبال‌کردن، فهرست کاربران ادمین، تبدیل/ارسال Voice Note mock و عدم fallback در وضعیت `queued` هستند. نتایج بازبینی نسخهٔ 1.6.3 و محدودیت تست زنده در [`docs/10-WEBHOOK-STARTUP-FIX-v1.6.3.md`](docs/10-WEBHOOK-STARTUP-FIX-v1.6.3.md) آمده است.
 
 > FFmpeg/libopus به Docker image Python افزوده شده، اما fallback تا زمان redeploy ربات قابل استفاده نیست. در مسیر webhook PHP، همچنان FFmpeg/libopus، `proc_open` و WP-Cron روی WordPress لازم‌اند؛ وضعیت زندهٔ هاست تأیید نشده است.
 
@@ -338,7 +339,7 @@ sqlite3 bot/ahangban.db ".backup backup/ahangban-$(date +%F).db"
 | `functions.php` رمزگذاری ionCube | ✅ حل شد — افزونه مستقل، بدون دست‌زدن به قالب | — |
 | لینک رسانه در دسترس نیست | ⚠️ URLهای واقعی از دیتابیس WordPress می‌آیند | fetch امن Telegram؛ در رد قطعی، stream محدود و در نهایت لینک واقعی صفحه/منبع |
 | ارسال فایل بزرگ‌تر از سقف امن 49 MiB | ⚠️ محدودیت Bot API/هاست | ربات لینک واقعی را نشان می‌دهد؛ ارسال فایل تکراری انجام نمی‌شود |
-| هاست اشتراکی بدون اجرای دائمی Python | ✅ وب‌هوک داخلی WordPress در افزونه v1.6.2 | اعتبارنامه‌ها را از فرم افزونه یا محیط PHP تنظیم کنید؛ Voice Note این مسیر هنوز به WP-Cron و FFmpeg/proc_open در PHP نیاز دارد |
+| هاست اشتراکی بدون اجرای دائمی Python | ✅ وب‌هوک داخلی WordPress در افزونه v1.6.3 | اعتبارنامه‌ها را از فرم افزونه یا محیط PHP تنظیم کنید؛ Voice Note این مسیر هنوز به WP-Cron و FFmpeg/proc_open در PHP نیاز دارد |
 | تغییر قالب | ✅ ربات به قالب وابسته نیست | فقط `post` + `artist` + متا |
 
 ---

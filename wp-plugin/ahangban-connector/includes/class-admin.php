@@ -241,9 +241,33 @@ class AhangBan_Admin {
             $last_error = self::safe_telegram_error_detail( $hook['last_error_message'] ?? '', $token );
             $message = '✅ اتصال API برقرار است — ' . esc_html( $bot_label ) . '. ';
             $message .= '' !== $hook_url ? 'وب‌هوک در تلگرام ثبت شده است: <code>' . esc_html( $safe_hook_url ) . '</code>.' : 'در حال حاضر وب‌هوکی در تلگرام ثبت نشده است.';
-            $message .= ' درخواست‌های در صف: ' . $pending . '.';
+            $message .= ' درخواست‌های در صف Telegram: ' . $pending . '.';
+            $queue_problem = empty( $hook_url ) || $pending > 0;
+            $local_queue = AhangBan_Telegram::get_local_queue_status();
+            if ( ! empty( $local_queue['available'] ) ) {
+                $message .= ' صف داخلی WordPress: ' . (int) $local_queue['queued'] . ' منتظر، ' . (int) $local_queue['processing'] . ' در حال اجرا، ' . (int) $local_queue['failed'] . ' ناموفق.';
+                if ( (int) $local_queue['failed'] > 0 ) { $queue_problem = true; }
+                if ( ! empty( $local_queue['oldest_active_at'] ) ) {
+                    $queue_age = max( 0, time() - (int) $local_queue['oldest_active_at'] );
+                    $message .= ' سن قدیمی‌ترین درخواست در صف/در حال اجرا: ' . $queue_age . ' ثانیه.';
+                    if ( $queue_age > 180 ) { $queue_problem = true; }
+                }
+                if ( ! empty( $local_queue['last_error'] ) ) {
+                    $message .= ' آخرین خطای صف داخلی: ' . esc_html( (string) $local_queue['last_error'] );
+                }
+                $send_error = is_array( $local_queue['last_send_error'] ?? null ) ? $local_queue['last_send_error'] : array();
+                if ( ! empty( $send_error['message'] ) ) {
+                    $queue_problem = true;
+                    $message .= ' آخرین خطای sendMessage از WordPress: ' . esc_html( (string) $send_error['message'] );
+                }
+            } else {
+                $queue_problem = true;
+                $message .= ' وضعیت صف داخلی WordPress در دسترس نیست؛ پایگاه دادهٔ افزونه را بررسی کنید.';
+            }
             if ( ! empty( $hook['last_error_message'] ) ) {
                 $message .= ' آخرین خطای دریافت Telegram: ' . esc_html( $last_error );
+            }
+            if ( ! empty( $hook['last_error_message'] ) || $queue_problem ) {
                 add_settings_error( 'ahangban_connector', 'telegram_connection_status', $message, 'error' );
             } else {
                 add_settings_error( 'ahangban_connector', 'telegram_connection_status', $message, 'updated' );
