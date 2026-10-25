@@ -239,11 +239,16 @@ class AhangBan_Admin {
             $safe_hook_url = self::safe_telegram_error_detail( $hook_url, $token );
             $pending = max( 0, (int) ( $hook['pending_update_count'] ?? 0 ) );
             $last_error = self::safe_telegram_error_detail( $hook['last_error_message'] ?? '', $token );
-            $message = '✅ اتصال API برقرار است — ' . esc_html( $bot_label ) . '. ';
-            $message .= '' !== $hook_url ? 'وب‌هوک در تلگرام ثبت شده است: <code>' . esc_html( $safe_hook_url ) . '</code>.' : 'در حال حاضر وب‌هوکی در تلگرام ثبت نشده است.';
-            $message .= ' درخواست‌های در صف Telegram: ' . $pending . '.';
-            $queue_problem = empty( $hook_url ) || $pending > 0;
             $local_queue = AhangBan_Telegram::get_local_queue_status();
+            $is_wp_polling = ! empty( $local_queue['wordpress_polling_enabled'] );
+            $message = '✅ اتصال API برقرار است — ' . esc_html( $bot_label ) . '. ';
+            if ( $is_wp_polling ) {
+                $message .= '' !== $hook_url ? 'هشدار: وب‌هوک هنوز در Telegram ثبت است و باید حذف شود.' : 'دریافت update با polling زمان‌بندی‌شدهٔ WordPress تنظیم شده است.';
+            } else {
+                $message .= '' !== $hook_url ? 'وب‌هوک در تلگرام ثبت شده است: <code>' . esc_html( $safe_hook_url ) . '</code>.' : 'در حال حاضر وب‌هوکی در تلگرام ثبت نشده است.';
+            }
+            $message .= ' updateهای در انتظار Telegram: ' . $pending . '.';
+            $queue_problem = $is_wp_polling ? ( '' !== $hook_url || $pending > 0 ) : ( '' === $hook_url || $pending > 0 );
             if ( ! empty( $local_queue['available'] ) ) {
                 $message .= ' صف داخلی WordPress: ' . (int) $local_queue['queued'] . ' منتظر، ' . (int) $local_queue['processing'] . ' در حال اجرا، ' . (int) $local_queue['failed'] . ' ناموفق.';
                 if ( (int) $local_queue['failed'] > 0 ) { $queue_problem = true; }
@@ -264,10 +269,33 @@ class AhangBan_Admin {
                 $queue_problem = true;
                 $message .= ' وضعیت صف داخلی WordPress در دسترس نیست؛ پایگاه دادهٔ افزونه را بررسی کنید.';
             }
-            if ( ! empty( $hook['last_error_message'] ) ) {
+            if ( $is_wp_polling ) {
+                $poll_last_attempt = (int) ( $local_queue['poll_last_attempt'] ?? 0 );
+                $poll_last_success = (int) ( $local_queue['poll_last_success'] ?? 0 );
+                if ( $poll_last_attempt > 0 ) {
+                    $poll_attempt_age = max( 0, time() - $poll_last_attempt );
+                    $message .= ' آخرین اجرای Cron polling: ' . $poll_attempt_age . ' ثانیه پیش.';
+                    if ( $poll_attempt_age > 180 ) { $queue_problem = true; }
+                } else {
+                    $message .= ' Cron polling هنوز اجرا نشده است.';
+                    $queue_problem = true;
+                }
+                if ( $poll_last_success > 0 ) {
+                    $poll_success_age = max( 0, time() - $poll_last_success );
+                    $message .= ' آخرین دریافت موفق update: ' . $poll_success_age . ' ثانیه پیش.';
+                    if ( $poll_success_age > 180 ) { $queue_problem = true; }
+                } else {
+                    $message .= ' هنوز دریافت موفقی ثبت نشده است.';
+                    $queue_problem = true;
+                }
+                if ( ! empty( $local_queue['poll_last_error'] ) ) {
+                    $message .= ' آخرین خطای polling: ' . esc_html( (string) $local_queue['poll_last_error'] );
+                    $queue_problem = true;
+                }
+            } elseif ( ! empty( $hook['last_error_message'] ) ) {
                 $message .= ' آخرین خطای دریافت Telegram: ' . esc_html( $last_error );
             }
-            if ( ! empty( $hook['last_error_message'] ) || $queue_problem ) {
+            if ( ( ! $is_wp_polling && ! empty( $hook['last_error_message'] ) ) || $queue_problem ) {
                 add_settings_error( 'ahangban_connector', 'telegram_connection_status', $message, 'error' );
             } else {
                 add_settings_error( 'ahangban_connector', 'telegram_connection_status', $message, 'updated' );
@@ -277,7 +305,7 @@ class AhangBan_Admin {
 
         if ( 'set_webhook' === $action ) {
             if ( 'webhook' !== AhangBan_Settings::get_mode() ) {
-                add_settings_error( 'ahangban_connector', 'wh_mode', 'حالت اجرا روی Python polling است؛ برای جلوگیری از تداخل، ابتدا حالت وب‌هوک را انتخاب کنید یا وب‌هوک قبلی را حذف کنید.', 'error' );
+                add_settings_error( 'ahangban_connector', 'wh_mode', 'حالت اجرا روی polling است؛ برای جلوگیری از تداخل، ابتدا حالت وب‌هوک را انتخاب کنید یا دریافت‌کنندهٔ قبلی را متوقف کنید.', 'error' );
                 self::redirect_after_action();
             }
             $token = AhangBan_Settings::get_bot_token();
@@ -310,7 +338,9 @@ class AhangBan_Admin {
                 add_settings_error( 'ahangban_connector', 'wh_err', esc_html( $response->get_error_message() ), 'error' );
             } elseif ( ! empty( $response['ok'] ) ) {
                 delete_option( AhangBan_Settings::OPTION_WEBHOOK_URL );
-                add_settings_error( 'ahangban_connector', 'wh_del', '🗑 وب‌هوک حذف شد.', 'updated' );
+                $delete_message = '🗑 وب‌هوک حذف شد؛ updateهای pending تلگرام حفظ شدند.';
+                if ( 'wordpress_polling' === AhangBan_Settings::get_mode() ) { $delete_message .= ' polling WordPress از اجرای Cron Job بعدی شروع می‌شود.'; }
+                add_settings_error( 'ahangban_connector', 'wh_del', $delete_message, 'updated' );
             } else {
                 add_settings_error( 'ahangban_connector', 'wh_err', 'تلگرام درخواست حذف را نپذیرفت: ' . esc_html( $response['description'] ?? '' ), 'error' );
             }
@@ -468,7 +498,13 @@ class AhangBan_Admin {
                     <table class="form-table" role="presentation">
                         <tr><th scope="row"><label for="admin_ids">شناسهٔ ادمین‌های تلگرام</label></th><td><input type="text" id="admin_ids" name="admin_ids" value="<?php echo esc_attr( $admin_ids ); ?>" dir="ltr" class="regular-text" placeholder="123456789, 987654321"><p class="description">با کاما جدا کنید. برای یافتن شناسه می‌توانید از <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer">@userinfobot</a> کمک بگیرید.</p></td></tr>
                         <tr><th scope="row"><label for="bot_username">یوزرنیم ربات</label></th><td><input type="text" id="bot_username" name="bot_username" value="<?php echo esc_attr( $bot_username ); ?>" dir="ltr" class="regular-text" placeholder="ahangbanbot"><p class="description">برای نمایش دکمهٔ «مشاهده و دریافت در ربات» روی پست کانال و ویس، یوزرنیم عمومی ربات را ثبت کنید.</p></td></tr>
-                        <tr><th scope="row">حالت اجرا</th><td><label><input type="radio" name="bot_mode" value="webhook" <?php checked( $bot_mode, 'webhook' ); ?>> وب‌هوک WordPress</label><br><label><input type="radio" name="bot_mode" value="polling" <?php checked( $bot_mode, 'polling' ); ?>> Python polling روی VPS جدا</label><p class="description">در حالت polling، ثبت وب‌هوک از همین صفحه غیرفعال می‌شود. سرویس Python را جداگانه اجرا کنید و اگر وب‌هوک قبلی ثبت است، پیش از polling آن را حذف کنید.</p></td></tr>
+                        <tr><th scope="row">حالت اجرا</th><td>
+                            <label><input type="radio" name="bot_mode" value="webhook" <?php checked( $bot_mode, 'webhook' ); ?>> وب‌هوک WordPress</label><br>
+                            <label><input type="radio" name="bot_mode" value="wordpress_polling" <?php checked( $bot_mode, 'wordpress_polling' ); ?>> polling زمان‌بندی‌شدهٔ WordPress (بدون VPS)</label><br>
+                            <label><input type="radio" name="bot_mode" value="polling" <?php checked( $bot_mode, 'polling' ); ?>> Python polling روی VPS جدا</label>
+                            <p class="description">polling وردپرس هر دقیقه با WP-Cron از Telegram update می‌گیرد؛ برای اجرای منظم، Cron Job هاست باید wp-cron.php را فراخوانی کند. پس از ذخیرهٔ این حالت، وب‌هوک قبلی را در بخش پایین حذف کنید؛ updateهای pending حذف نمی‌شوند. پاسخ معمولاً تا یک بازهٔ Cron تأخیر دارد؛ هنگام backlog ممکن است چند بازه طول بکشد.</p>
+                            <p class="description">برای یک Bot Token فقط یک دریافت‌کننده فعال باشد؛ polling وردپرس، وب‌هوک و Python polling را هم‌زمان اجرا نکنید.</p>
+                        </td></tr>
                     </table>
                     <button type="submit" class="button button-primary">ذخیرهٔ تنظیمات غیرحساس</button>
                 </form>
@@ -546,8 +582,9 @@ class AhangBan_Admin {
             </section>
 
             <section class="ab-card" aria-labelledby="ab-webhook-title">
-                <div class="ab-card-heading"><div><span class="ab-step">۰۶</span><h2 id="ab-webhook-title">وب‌هوک تلگرام</h2></div><span class="ab-muted">بدون نیاز به اجرای دائمی Python</span></div>
-                <p>وب‌هوک پیام‌ها را روی همین WordPress دریافت می‌کند. برای ثبت وب‌هوک، توکن ربات و Secret وب‌هوک باید از محیط PHP یا اعتبارنامه‌های ذخیره‌شده در همین افزونه در دسترس باشند. API Token برای احراز هویت مسیرهای REST داده لازم است.</p>
+                <div class="ab-card-heading"><div><span class="ab-step">۰۶</span><h2 id="ab-webhook-title">دریافت پیام‌های Telegram</h2></div><span class="ab-muted"><?php echo 'wordpress_polling' === $bot_mode ? 'WordPress Cron polling' : 'وب‌هوک WordPress'; ?></span></div>
+                <p>در حالت وب‌هوک، Telegram به همین WordPress درخواست ورودی می‌فرستد. در حالت polling زمان‌بندی‌شده، WordPress هر دقیقه با درخواست خروجی `getUpdates` پیام‌ها را می‌گیرد؛ Cron Job هاست باید wp-cron.php را اجرا کند. برای هر Bot Token فقط یکی از وب‌هوک، polling وردپرس یا Python polling فعال باشد.</p>
+                <?php if ( 'wordpress_polling' === $bot_mode ) : ?><p class="ab-notice ab-notice--warning">برای آغاز polling، وب‌هوک قبلی را با دکمهٔ «حذف وب‌هوک» پاک کنید. updateهای pending حفظ می‌شوند؛ تا حذف وب‌هوک، Telegram درخواست getUpdates را رد می‌کند.</p><?php endif; ?>
                 <div class="ab-webhook-url"><code id="ab-webhook-url" dir="ltr"><?php echo esc_html( $webhook_url ); ?></code><button type="button" class="button button-small" data-ab-copy="ab-webhook-url">کپی نشانی</button><span class="screen-reader-text" aria-live="polite" data-ab-copy-status></span></div>
                 <div class="ab-actions">
                     <form method="post">
@@ -572,7 +609,7 @@ class AhangBan_Admin {
                     </form>
                 </div>
                 <p class="description">«آزمون اتصال» فقط getMe و وضعیت وب‌هوک را می‌خواند و پیامی نمی‌فرستد؛ خطای فنی HTTP/cURL/SSL پس از آزمون در اعلان بالای همین صفحه می‌آید و توکن/Secret از متن حذف می‌شود.</p>
-                <p class="description">برای اجرای صف انتشار کانال و پیام همگانی، WP-Cron یا Cron Job هاست باید فعال باشد.</p>
+                <p class="description">برای صف انتشار کانال/پیام همگانی، WP-Cron باید فعال باشد. در حالت polling WordPress، Cron Job هاست باید wp-cron.php را دست‌کم هر دقیقه اجرا کند؛ آخرین اجرا و خطا در «آزمون اتصال و وضعیت وب‌هوک» نمایش داده می‌شود.</p>
             </section>
 
             <section class="ab-card" aria-labelledby="ab-api-title">

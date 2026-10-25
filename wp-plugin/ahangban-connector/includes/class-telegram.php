@@ -2,8 +2,8 @@
 if ( ! defined( 'ABSPATH' ) ) { exit; }
 
 /**
- * AhangBan Telegram — وب‌هوک PHP داخل وردپرس (بدون نیاز به سرور جدا)
- * برای هاست اشتراکی دایرکت‌ادمین: کافیست وب‌هوک ست شود، پیام‌ها مستقیم روی همین هاست هندل می‌شوند.
+ * AhangBan Telegram — وب‌هوک یا polling زمان‌بندی‌شدهٔ PHP داخل وردپرس (بدون نیاز به سرور جدا)
+ * برای هاست اشتراکی: دریافت update می‌تواند از مسیر وب‌هوک یا Cron Job خروجی انجام شود.
  */
 class AhangBan_Telegram {
     const NS = 'ahangban/v1';
@@ -12,9 +12,17 @@ class AhangBan_Telegram {
     const CHANNEL_PREVIEW_SECONDS = 60;
     const CHANNEL_PREVIEW_STATUS_META = '_ahangban_tg_channel_preview_status';
     const BROADCAST_BATCH = 5;
+    const WP_POLL_HOOK = 'ahangban_bot_poll_updates';
+    const WP_POLL_SCHEDULE = 'ahangban_every_minute';
+    const WP_POLL_OFFSET_OPTION = 'ahangban_telegram_poll_offset';
+    const WP_POLL_LAST_ATTEMPT_OPTION = 'ahangban_telegram_poll_last_attempt';
+    const WP_POLL_LAST_SUCCESS_OPTION = 'ahangban_telegram_poll_last_success';
+    const WP_POLL_LAST_ERROR_OPTION = 'ahangban_telegram_poll_last_error';
+    const WP_POLL_LOCK_OPTION = 'ahangban_telegram_poll_lock';
 
     public static function init() {
         self::maybe_install_tables();
+        add_filter( 'cron_schedules', array( __CLASS__, 'register_poll_schedule' ) );
         add_action( 'rest_api_init', array( __CLASS__, 'register_routes' ) );
         add_action( 'ahangban_bot_process_broadcast', array( __CLASS__, 'process_broadcast_batch' ), 10, 1 );
         // wp_after_insert_post runs after post metadata (including ACF musics_type/media fields) is saved.
@@ -22,6 +30,38 @@ class AhangBan_Telegram {
         add_action( 'ahangban_bot_send_channel_announcement', array( __CLASS__, 'send_channel_announcement' ), 10, 1 );
         add_action( 'ahangban_bot_send_channel_preview', array( __CLASS__, 'process_channel_preview' ), 10, 3 );
         add_action( 'ahangban_bot_process_update', array( __CLASS__, 'process_queued_update' ), 10, 1 );
+        add_action( self::WP_POLL_HOOK, array( __CLASS__, 'poll_telegram_updates' ) );
+        self::sync_poll_schedule();
+    }
+
+    public static function register_poll_schedule( $schedules ) {
+        if ( ! isset( $schedules[ self::WP_POLL_SCHEDULE ] ) ) {
+            $schedules[ self::WP_POLL_SCHEDULE ] = array(
+                'interval' => MINUTE_IN_SECONDS,
+                'display' => 'AhangBan: once per minute',
+            );
+        }
+        return $schedules;
+    }
+
+    private static function sync_poll_schedule() {
+        $next = wp_next_scheduled( self::WP_POLL_HOOK );
+        if ( 'wordpress_polling' !== AhangBan_Settings::get_mode() ) {
+            if ( false !== $next ) { wp_clear_scheduled_hook( self::WP_POLL_HOOK ); }
+            return;
+        }
+        if ( false === $next ) {
+            $scheduled = wp_schedule_event( time() + 5, self::WP_POLL_SCHEDULE, self::WP_POLL_HOOK, array(), true );
+            if ( is_wp_error( $scheduled ) || false === $scheduled ) {
+                error_log( '[AhangBan Telegram] Could not schedule WordPress polling. Check WP-Cron configuration.' );
+            }
+        }
+    }
+
+    public static function deactivate() {
+        wp_clear_scheduled_hook( self::WP_POLL_HOOK );
+        delete_option( self::WP_POLL_LOCK_OPTION );
+        wp_cache_delete( self::WP_POLL_LOCK_OPTION, 'options' );
     }
 
     /** Only classify verified music records; never broadcast an arbitrary WordPress post. */
@@ -810,17 +850,131 @@ class AhangBan_Telegram {
         }
     }
 
+    private static function acquire_wp_poll_lock() {
+        global $wpdb;
+        $now = time();
+        $key = self::WP_POLL_LOCK_OPTION;
+        $wpdb->query( $wpdb->prepare(
+            "DELETE FROM {$wpdb->options} WHERE option_name = %s AND CAST(option_value AS UNSIGNED) < %d",
+            $key,
+            $now
+        ) );
+        wp_cache_delete( $key, 'options' );
+        return add_option( $key, $now + 90, '', false );
+    }
+
+    private static function release_wp_poll_lock() {
+        delete_option( self::WP_POLL_LOCK_OPTION );
+        wp_cache_delete( self::WP_POLL_LOCK_OPTION, 'options' );
+    }
+
+    private static function record_wp_poll_error( $message ) {
+        $message = sanitize_text_field( (string) $message );
+        $token = AhangBan_Settings::get_bot_token();
+        $secret = AhangBan_Settings::get_bot_secret();
+        if ( '' !== $token ) { $message = str_replace( $token, '[redacted]', $message ); }
+        if ( '' !== $secret ) { $message = str_replace( $secret, '[redacted]', $message ); }
+        $message = function_exists( 'mb_substr' ) ? mb_substr( $message, 0, 500, 'UTF-8' ) : substr( $message, 0, 500 );
+        update_option( self::WP_POLL_LAST_ERROR_OPTION, $message, false );
+        error_log( '[AhangBan Telegram] WordPress polling failed: ' . $message );
+    }
+
+    /** Pull updates over an outbound HTTPS connection; persist before advancing Telegram's offset. */
+    public static function poll_telegram_updates() {
+        if ( 'wordpress_polling' !== AhangBan_Settings::get_mode() ) { return; }
+        update_option( self::WP_POLL_LAST_ATTEMPT_OPTION, time(), false );
+        if ( ! self::acquire_wp_poll_lock() ) { return; }
+
+        try {
+            if ( '' === AhangBan_Settings::get_bot_token() ) {
+                self::record_wp_poll_error( 'توکن ربات برای polling وردپرس تنظیم نشده است.' );
+                return;
+            }
+            $offset = max( 0, (int) get_option( self::WP_POLL_OFFSET_OPTION, 0 ) );
+            $response = self::api_call( 'getUpdates', array(
+                'offset' => $offset,
+                'limit' => 2,
+                'timeout' => 0,
+                'allowed_updates' => array( 'message', 'callback_query' ),
+            ), 10 );
+            if ( is_wp_error( $response ) ) {
+                self::record_wp_poll_error( $response->get_error_message() );
+                return;
+            }
+            if ( ! is_array( $response ) || empty( $response['ok'] ) || ! is_array( $response['result'] ?? null ) ) {
+                $description = is_array( $response ) ? (string) ( $response['description'] ?? 'پاسخ getUpdates نامعتبر است.' ) : 'پاسخ getUpdates نامعتبر است.';
+                self::record_wp_poll_error( $description );
+                return;
+            }
+
+            $next_offset = $offset;
+            $process_now = null;
+            foreach ( $response['result'] as $update ) {
+                if ( ! is_array( $update ) || ! array_key_exists( 'update_id', $update ) ) {
+                    self::record_wp_poll_error( 'ساختار update دریافتی از Telegram نامعتبر است؛ offset جلو نرفت.' );
+                    return;
+                }
+                $validated_id = filter_var( $update['update_id'], FILTER_VALIDATE_INT, array( 'options' => array( 'min_range' => 0 ) ) );
+                if ( false === $validated_id ) {
+                    self::record_wp_poll_error( 'شناسهٔ update دریافتی از Telegram نامعتبر است؛ offset جلو نرفت.' );
+                    return;
+                }
+                $update_id = (int) $validated_id;
+                $payload = wp_json_encode( $update, JSON_UNESCAPED_UNICODE );
+                if ( ! is_string( $payload ) || '' === $payload ) {
+                    self::record_wp_poll_error( 'ذخیرهٔ payload دریافتی از Telegram ممکن نیست؛ offset جلو نرفت.' );
+                    return;
+                }
+                $queued = self::enqueue_update( $update_id, $payload );
+                if ( is_wp_error( $queued ) ) {
+                    self::record_wp_poll_error( $queued->get_error_message() );
+                    return;
+                }
+                if ( 'duplicate' !== ( $queued['status'] ?? '' ) ) {
+                    if ( ! self::schedule_update_worker( $update_id, (int) ( $queued['run_at'] ?? 0 ) ) ) {
+                        self::record_wp_poll_error( 'update ذخیره شد اما worker زمان‌بندی نشد؛ offset جلو نرفت.' );
+                        return;
+                    }
+                    // Process one update now for responsiveness; later items remain durable in WP-Cron.
+                    if ( null === $process_now && 'queued' === ( $queued['status'] ?? '' ) ) { $process_now = $update_id; }
+                }
+                $next_offset = max( $next_offset, $update_id + 1 );
+            }
+
+            if ( $next_offset > $offset ) {
+                update_option( self::WP_POLL_OFFSET_OPTION, $next_offset, false );
+                if ( (int) get_option( self::WP_POLL_OFFSET_OPTION, 0 ) !== $next_offset ) {
+                    self::record_wp_poll_error( 'updateها ذخیره شدند اما offset جدید در پایگاه داده ثبت نشد.' );
+                    return;
+                }
+            }
+            update_option( self::WP_POLL_LAST_SUCCESS_OPTION, time(), false );
+            update_option( self::WP_POLL_LAST_ERROR_OPTION, '', false );
+            if ( null !== $process_now ) { self::process_queued_update( $process_now ); }
+        } catch ( Throwable $e ) {
+            self::record_wp_poll_error( $e->getMessage() );
+        } finally {
+            self::release_wp_poll_lock();
+        }
+    }
+
     /** Read-only local queue diagnostics for administrators. */
     public static function get_local_queue_status() {
         global $wpdb;
         $table = self::updates_table();
         $send_error = get_transient( 'ahangban_tg_api_error_sendMessage' );
         $send_error = is_array( $send_error ) ? $send_error : array();
+        $poll_status = array(
+            'wordpress_polling_enabled' => 'wordpress_polling' === AhangBan_Settings::get_mode(),
+            'poll_last_attempt' => (int) get_option( self::WP_POLL_LAST_ATTEMPT_OPTION, 0 ),
+            'poll_last_success' => (int) get_option( self::WP_POLL_LAST_SUCCESS_OPTION, 0 ),
+            'poll_last_error' => (string) get_option( self::WP_POLL_LAST_ERROR_OPTION, '' ),
+        );
         $exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
         if ( self::SCHEMA_VERSION !== (string) get_option( 'ahangban_telegram_schema', '' ) || $table !== $exists ) {
-            return array( 'available' => false, 'queued' => 0, 'processing' => 0, 'failed' => 0, 'oldest_active_at' => 0, 'last_error' => '', 'last_send_error' => $send_error );
+            return array_merge( array( 'available' => false, 'queued' => 0, 'processing' => 0, 'failed' => 0, 'oldest_active_at' => 0, 'last_error' => '', 'last_send_error' => $send_error ), $poll_status );
         }
-        $status = array( 'available' => true, 'queued' => 0, 'processing' => 0, 'failed' => 0, 'oldest_active_at' => 0, 'last_error' => '', 'last_send_error' => $send_error );
+        $status = array_merge( array( 'available' => true, 'queued' => 0, 'processing' => 0, 'failed' => 0, 'oldest_active_at' => 0, 'last_error' => '', 'last_send_error' => $send_error ), $poll_status );
         $rows = $wpdb->get_results( "SELECT status,COUNT(*) AS total FROM {$table} GROUP BY status", ARRAY_A );
         foreach ( (array) $rows as $row ) {
             $key = (string) ( $row['status'] ?? '' );
@@ -1017,7 +1171,7 @@ class AhangBan_Telegram {
         if ( ! preg_match( '/^\d{6,}:[A-Za-z0-9_-]{20,}$/', $token ) ) {
             return new WP_Error( 'invalid_token', 'فرمت توکن ربات نامعتبر است.' );
         }
-        if ( ! in_array( $method, array( 'sendMessage', 'sendChatAction', 'sendPhoto', 'sendAudio', 'sendVideo', 'sendDocument', 'answerCallbackQuery', 'editMessageText', 'editMessageCaption' ), true ) ) {
+        if ( ! in_array( $method, array( 'sendMessage', 'sendChatAction', 'sendPhoto', 'sendAudio', 'sendVideo', 'sendDocument', 'answerCallbackQuery', 'editMessageText', 'editMessageCaption', 'getUpdates' ), true ) ) {
             return new WP_Error( 'invalid_method', 'عملیات تلگرام نامعتبر است.' );
         }
         $url = 'https://api.telegram.org/bot' . $token . '/' . $method;
