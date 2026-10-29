@@ -13,7 +13,7 @@
 | نسخهٔ Python | `3.11-ubi9` |
 | application port | `8000` |
 | Build command | `pip install -r requirements.txt` (if the panel requires one) |
-| Start command | `python main.py` |
+| Start command | `python app.py` |
 | Build variables | خالی بگذارید |
 
 کد از متغیر `PORT` استفاده می‌کند و اگر PaaS آن را تزریق نکند، مقدار پیش‌فرض `8000` است. در Environment Variables نیز `PORT=8000` بگذارید تا با application port یکی باشد.
