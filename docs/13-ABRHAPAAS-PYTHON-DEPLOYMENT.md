@@ -12,7 +12,7 @@
 | Sub-domain | `ahangbanbot-worker` (دامنه برای health check پنل است؛ Telegram از آن استفاده نمی‌کند) |
 | نسخهٔ Python | `3.11-ubi9` |
 | application port | `8000` |
-| Build command | `pip install -r requirements.txt` (if the panel requires one; it includes `bot/requirements.txt`) |
+| Build command | `pip install -r requirements.txt` (if the panel requires one) |
 | Start command | `python -m bot.main` |
 | Build variables | خالی بگذارید |
 
