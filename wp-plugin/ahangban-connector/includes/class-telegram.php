@@ -13,7 +13,9 @@ class AhangBan_Telegram {
     const CHANNEL_PREVIEW_STATUS_META = '_ahangban_tg_channel_preview_status';
     const BROADCAST_BATCH = 5;
     const WP_POLL_HOOK = 'ahangban_bot_poll_updates';
-    const WP_POLL_SCHEDULE = 'ahangban_every_minute';
+    const WP_POLL_SCHEDULE = 'ahangban_every_30_seconds';
+    const WP_POLL_INTERVAL = 30;
+    const WP_POLL_STALE_SECONDS = 90;
     const WP_POLL_OFFSET_OPTION = 'ahangban_telegram_poll_offset';
     const WP_POLL_LAST_ATTEMPT_OPTION = 'ahangban_telegram_poll_last_attempt';
     const WP_POLL_LAST_SUCCESS_OPTION = 'ahangban_telegram_poll_last_success';
@@ -37,8 +39,8 @@ class AhangBan_Telegram {
     public static function register_poll_schedule( $schedules ) {
         if ( ! isset( $schedules[ self::WP_POLL_SCHEDULE ] ) ) {
             $schedules[ self::WP_POLL_SCHEDULE ] = array(
-                'interval' => MINUTE_IN_SECONDS,
-                'display' => 'AhangBan: once per minute',
+                'interval' => self::WP_POLL_INTERVAL,
+                'display' => 'AhangBan: every 30 seconds',
             );
         }
         return $schedules;
@@ -50,6 +52,16 @@ class AhangBan_Telegram {
             if ( false !== $next ) { wp_clear_scheduled_hook( self::WP_POLL_HOOK ); }
             return;
         }
+
+        // Replace the v1.6.4 one-minute recurrence when upgrading to the faster schedule.
+        if ( false !== $next ) {
+            $event = wp_get_scheduled_event( self::WP_POLL_HOOK );
+            if ( ! is_object( $event ) || self::WP_POLL_SCHEDULE !== (string) ( $event->schedule ?? '' ) ) {
+                wp_clear_scheduled_hook( self::WP_POLL_HOOK );
+                $next = false;
+            }
+        }
+
         if ( false === $next ) {
             $scheduled = wp_schedule_event( time() + 5, self::WP_POLL_SCHEDULE, self::WP_POLL_HOOK, array(), true );
             if ( is_wp_error( $scheduled ) || false === $scheduled ) {

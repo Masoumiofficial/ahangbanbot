@@ -275,7 +275,7 @@ class AhangBan_Admin {
                 if ( $poll_last_attempt > 0 ) {
                     $poll_attempt_age = max( 0, time() - $poll_last_attempt );
                     $message .= ' آخرین اجرای Cron polling: ' . $poll_attempt_age . ' ثانیه پیش.';
-                    if ( $poll_attempt_age > 180 ) { $queue_problem = true; }
+                    if ( $poll_attempt_age > AhangBan_Telegram::WP_POLL_STALE_SECONDS ) { $queue_problem = true; }
                 } else {
                     $message .= ' Cron polling هنوز اجرا نشده است.';
                     $queue_problem = true;
@@ -283,7 +283,7 @@ class AhangBan_Admin {
                 if ( $poll_last_success > 0 ) {
                     $poll_success_age = max( 0, time() - $poll_last_success );
                     $message .= ' آخرین دریافت موفق update: ' . $poll_success_age . ' ثانیه پیش.';
-                    if ( $poll_success_age > 180 ) { $queue_problem = true; }
+                    if ( $poll_success_age > AhangBan_Telegram::WP_POLL_STALE_SECONDS ) { $queue_problem = true; }
                 } else {
                     $message .= ' هنوز دریافت موفقی ثبت نشده است.';
                     $queue_problem = true;
@@ -502,7 +502,7 @@ class AhangBan_Admin {
                             <label><input type="radio" name="bot_mode" value="webhook" <?php checked( $bot_mode, 'webhook' ); ?>> وب‌هوک WordPress</label><br>
                             <label><input type="radio" name="bot_mode" value="wordpress_polling" <?php checked( $bot_mode, 'wordpress_polling' ); ?>> polling زمان‌بندی‌شدهٔ WordPress (بدون VPS)</label><br>
                             <label><input type="radio" name="bot_mode" value="polling" <?php checked( $bot_mode, 'polling' ); ?>> Python polling روی VPS جدا</label>
-                            <p class="description">polling وردپرس هر دقیقه با WP-Cron از Telegram update می‌گیرد؛ برای اجرای منظم، Cron Job هاست باید wp-cron.php را فراخوانی کند. پس از ذخیرهٔ این حالت، وب‌هوک قبلی را در بخش پایین حذف کنید؛ updateهای pending حذف نمی‌شوند. پاسخ معمولاً تا یک بازهٔ Cron تأخیر دارد؛ هنگام backlog ممکن است چند بازه طول بکشد.</p>
+                            <p class="description">polling وردپرس هر ۳۰ ثانیه با WP-Cron از Telegram update می‌گیرد. برای پاسخ سریع‌تر، Cron Job هاست هم باید wp-cron.php را هر ۳۰ ثانیه اجرا کند؛ اگر هاست فقط بازهٔ یک‌دقیقه‌ای دارد، تأخیر ممکن است تا حدود یک دقیقه باشد. پس از ذخیرهٔ این حالت، وب‌هوک قبلی را در بخش پایین حذف کنید؛ updateهای pending حذف نمی‌شوند. هنگام backlog ممکن است چند بازه طول بکشد.</p>
                             <p class="description">برای یک Bot Token فقط یک دریافت‌کننده فعال باشد؛ polling وردپرس، وب‌هوک و Python polling را هم‌زمان اجرا نکنید.</p>
                         </td></tr>
                     </table>
@@ -583,7 +583,7 @@ class AhangBan_Admin {
 
             <section class="ab-card" aria-labelledby="ab-webhook-title">
                 <div class="ab-card-heading"><div><span class="ab-step">۰۶</span><h2 id="ab-webhook-title">دریافت پیام‌های Telegram</h2></div><span class="ab-muted"><?php echo 'wordpress_polling' === $bot_mode ? 'WordPress Cron polling' : 'وب‌هوک WordPress'; ?></span></div>
-                <p>در حالت وب‌هوک، Telegram به همین WordPress درخواست ورودی می‌فرستد. در حالت polling زمان‌بندی‌شده، WordPress هر دقیقه با درخواست خروجی `getUpdates` پیام‌ها را می‌گیرد؛ Cron Job هاست باید wp-cron.php را اجرا کند. برای هر Bot Token فقط یکی از وب‌هوک، polling وردپرس یا Python polling فعال باشد.</p>
+                <p>در حالت وب‌هوک، Telegram به همین WordPress درخواست ورودی می‌فرستد. در حالت polling زمان‌بندی‌شده، WordPress هر ۳۰ ثانیه با درخواست خروجی `getUpdates` پیام‌ها را می‌گیرد؛ برای همین cadence، Cron Job هاست هم باید wp-cron.php را هر ۳۰ ثانیه اجرا کند. اگر هاست فقط Cron دقیقه‌ای دارد، polling ادامه می‌یابد اما تأخیر کمتر از یک دقیقه تضمین نمی‌شود. برای هر Bot Token فقط یکی از وب‌هوک، polling وردپرس یا Python polling فعال باشد.</p>
                 <?php if ( 'wordpress_polling' === $bot_mode ) : ?><p class="ab-notice ab-notice--warning">برای آغاز polling، وب‌هوک قبلی را با دکمهٔ «حذف وب‌هوک» پاک کنید. updateهای pending حفظ می‌شوند؛ تا حذف وب‌هوک، Telegram درخواست getUpdates را رد می‌کند.</p><?php endif; ?>
                 <div class="ab-webhook-url"><code id="ab-webhook-url" dir="ltr"><?php echo esc_html( $webhook_url ); ?></code><button type="button" class="button button-small" data-ab-copy="ab-webhook-url">کپی نشانی</button><span class="screen-reader-text" aria-live="polite" data-ab-copy-status></span></div>
                 <div class="ab-actions">
@@ -609,7 +609,7 @@ class AhangBan_Admin {
                     </form>
                 </div>
                 <p class="description">«آزمون اتصال» فقط getMe و وضعیت وب‌هوک را می‌خواند و پیامی نمی‌فرستد؛ خطای فنی HTTP/cURL/SSL پس از آزمون در اعلان بالای همین صفحه می‌آید و توکن/Secret از متن حذف می‌شود.</p>
-                <p class="description">برای صف انتشار کانال/پیام همگانی، WP-Cron باید فعال باشد. در حالت polling WordPress، Cron Job هاست باید wp-cron.php را دست‌کم هر دقیقه اجرا کند؛ آخرین اجرا و خطا در «آزمون اتصال و وضعیت وب‌هوک» نمایش داده می‌شود.</p>
+                <p class="description">برای صف انتشار کانال/پیام همگانی، WP-Cron باید فعال باشد. برای polling سریع‌تر WordPress، Cron Job هاست را در صورت پشتیبانی هر ۳۰ ثانیه اجرا کنید؛ اجرای هر دقیقه همچنان کار می‌کند اما ممکن است حدود یک دقیقه تأخیر داشته باشد. آخرین اجرا و خطا در «آزمون اتصال و وضعیت وب‌هوک» نمایش داده می‌شود.</p>
             </section>
 
             <section class="ab-card" aria-labelledby="ab-api-title">
