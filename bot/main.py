@@ -135,7 +135,17 @@ async def rate_limit_middleware(update: Update, context):
 
 # Global error handler
 async def error_handler(update, context):
-    log.exception("Unhandled error for update %s: %s", update, context.error)
+    error = context.error
+    update_id = getattr(update, "update_id", None)
+    if error:
+        log.error(
+            "Unhandled bot error (update_id=%s, exception=%s)",
+            update_id,
+            type(error).__name__,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+    else:
+        log.error("Unhandled bot error (update_id=%s, no exception object)", update_id)
     # Try to notify user politely (no stack trace)
     try:
         if update and update.effective_message:

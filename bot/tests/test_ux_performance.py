@@ -91,6 +91,74 @@ async def test_channel_deep_link_opens_the_song_without_duplicate_welcome(monkey
 
 
 @pytest.mark.asyncio
+async def test_artist_list_from_media_callback_replies_in_text_instead_of_editing_media(monkeypatch):
+    loading_message = SimpleNamespace(edit_text=AsyncMock())
+    message = SimpleNamespace(
+        photo=[object()],
+        video=None,
+        audio=None,
+        document=None,
+        chat=SimpleNamespace(),
+        reply_text=AsyncMock(return_value=loading_message),
+    )
+    query = SimpleNamespace(
+        data="artists:page:1",
+        message=message,
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(callback_query=query, effective_chat=SimpleNamespace())
+    context = SimpleNamespace(user_data={})
+    monkeypatch.setattr(artist.api, "artists", AsyncMock(return_value={
+        "results": [{"name": "خوانندهٔ نمونه", "count": 1, "term_id": 7}],
+        "total": 1,
+        "per_page": 10,
+    }))
+    monkeypatch.setattr(artist, "increment_stat", AsyncMock())
+
+    await artist.artists_list_handler(update, context)
+
+    query.answer.assert_awaited_once()
+    query.edit_message_text.assert_not_awaited()
+    message.reply_text.assert_awaited_once_with("⏳ در حال بارگذاری خوانندگان…")
+    loading_message.edit_text.assert_awaited_once()
+    assert "فهرست خوانندگان" in loading_message.edit_text.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_artist_detail_callback_merges_keyboard_tuple_into_markup(monkeypatch):
+    user = SimpleNamespace(id=12345)
+    chat = SimpleNamespace(send_action=AsyncMock())
+    message = SimpleNamespace(photo=None, video=None, audio=None, document=None, chat=chat)
+    query = SimpleNamespace(
+        data="artist:7",
+        message=message,
+        from_user=user,
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+    )
+    update = SimpleNamespace(callback_query=query, effective_user=user)
+    context = SimpleNamespace(user_data={})
+    monkeypatch.setattr(artist.api, "artist", AsyncMock(return_value={
+        "term": {"term_id": 7, "name": "خوانندهٔ نمونه", "count": 1},
+        "buckets": {},
+        "results": [],
+        "total": 0,
+        "per_page": 6,
+    }))
+    monkeypatch.setattr(artist, "count_artist_followers", AsyncMock(return_value=0))
+    monkeypatch.setattr(artist, "is_artist_followed", AsyncMock(return_value=False))
+    monkeypatch.setattr(artist, "increment_stat", AsyncMock())
+
+    await artist.artist_callback(update, context)
+
+    query.answer.assert_awaited_once()
+    query.edit_message_text.assert_awaited_once()
+    assert "خوانندهٔ نمونه" in query.edit_message_text.await_args.args[0]
+    assert query.edit_message_text.await_args.kwargs["reply_markup"].inline_keyboard
+
+
+@pytest.mark.asyncio
 async def test_artist_search_empty_state_offers_alphabetical_list(monkeypatch):
     message = SimpleNamespace(text="نام ناشناس", reply_text=AsyncMock())
     update = SimpleNamespace(message=message)
