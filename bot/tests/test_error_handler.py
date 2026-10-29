@@ -7,9 +7,10 @@ from bot.main import error_handler
 
 
 @pytest.mark.asyncio
-async def test_global_error_handler_logs_traceback_without_echoing_update_content(caplog):
+async def test_global_error_handler_logs_stack_without_exception_text_or_secrets(caplog):
+    secret = "a" * 64
     try:
-        raise ValueError("safe test failure")
+        raise ValueError(f"safe test failure; token={secret}")
     except ValueError as exc:
         error = exc
 
@@ -20,8 +21,11 @@ async def test_global_error_handler_logs_traceback_without_echoing_update_conten
     with caplog.at_level("ERROR", logger="ahangban"):
         await error_handler(update, context)
 
-    assert any(record.exc_info and record.exc_info[0] is ValueError for record in caplog.records)
     assert "update_id=123" in caplog.text
+    assert "ValueError" in caplog.text
+    assert "safe test failure" not in caplog.text
+    assert secret not in caplog.text
+    assert all(not record.exc_info for record in caplog.records)
     message.reply_text.assert_awaited_once_with(
         "❌ خطای غیرمنتظره — لطفاً دوباره تلاش کنید.\nاگر تکرار شد، /ping را امتحان کنید."
     )

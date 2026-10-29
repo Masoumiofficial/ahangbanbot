@@ -1,4 +1,4 @@
-import html
+import logging
 import time
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -6,6 +6,9 @@ from ..config import is_admin
 from ..db import is_blocked
 from ..utils.formatters import welcome_text, help_text
 from ..utils.keyboards import main_inline
+
+log = logging.getLogger("ahangban.start")
+
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -52,10 +55,9 @@ async def ping_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise RuntimeError('پاسخ سلامت سایت معتبر نیست')
         await update.message.reply_text("✅ اتصال امن به سرویس آهنگ‌بان برقرار است.")
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ خطا در اتصال به سایت:\n<code>{html.escape(str(e)[:300])}</code>",
-            parse_mode="HTML",
-        )
+        # Keep transport/auth detail in server logs only; never echo credentials or raw errors.
+        log.warning("health check failed (%s)", type(e).__name__)
+        await update.message.reply_text("❌ اتصال امن به سرویس آهنگ‌بان برقرار نشد؛ بعداً دوباره تلاش کن.")
 
 async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

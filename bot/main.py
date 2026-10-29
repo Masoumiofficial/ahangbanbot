@@ -3,8 +3,10 @@
 """
 import asyncio
 import logging
+import re
 import signal
 import time
+import traceback
 
 from telegram import Update
 from telegram.ext import (
@@ -20,6 +22,14 @@ from telegram.ext import (
 from .config import BOT_TOKEN, LOG_LEVEL, RATE_LIMIT_PER_MINUTE, is_admin, validate
 from .db import check_rate_limit, init_db, is_blocked, upsert_user
 from .health_server import start_health_server
+from .handlers.account import (
+    account_feed_handler,
+    account_follows_handler,
+    account_link_code_handler,
+    account_me_handler,
+    account_saved_handler,
+    account_unlink_handler,
+)
 from .handlers.admin import (
     admin_broadcast_cancel_callback,
     admin_broadcast_confirm_callback,
@@ -138,11 +148,14 @@ async def error_handler(update, context):
     error = context.error
     update_id = getattr(update, "update_id", None)
     if error:
+        # Keep stack frames for diagnostics but omit exception text, which could contain a token.
+        frames = traceback.extract_tb(error.__traceback__) if error.__traceback__ else []
+        stack = "\n".join(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}' for frame in frames)
         log.error(
-            "Unhandled bot error (update_id=%s, exception=%s)",
+            "Unhandled bot error (update_id=%s, exception=%s)\n%s",
             update_id,
             type(error).__name__,
-            exc_info=(type(error), error, error.__traceback__),
+            stack,
         )
     else:
         log.error("Unhandled bot error (update_id=%s, no exception object)", update_id)
@@ -173,8 +186,13 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("ping", ping_handler))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("song", song_command))
-    app.add_handler(CommandHandler("latest", latest_handler))
+    app.add_handler(CommandHandler("latest", account_feed_handler))
+    app.add_handler(CommandHandler("feed", account_feed_handler))
     app.add_handler(CommandHandler("new", latest_handler))
+    app.add_handler(CommandHandler("me", account_me_handler))
+    app.add_handler(CommandHandler("saved", account_saved_handler))
+    app.add_handler(CommandHandler("follows", account_follows_handler))
+    app.add_handler(CommandHandler("unlink", account_unlink_handler))
     app.add_handler(CommandHandler("popular", popular_handler))
     app.add_handler(CommandHandler("artist", artist_command))
     app.add_handler(CommandHandler("artists", artists_list_handler))
@@ -225,7 +243,16 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(home_callback, pattern=r"^home$"))
     app.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
 
-    # Text messages (search) — must be last among message handlers
+    # Account-link codes are sent as ordinary text messages, never as /start payloads.
+    app.add_handler(
+        MessageHandler(
+            filters.Regex(re.compile(r"^[A-HJ-NP-Z2-9]{8}$", re.IGNORECASE))
+            & filters.TEXT
+            & ~filters.COMMAND,
+            account_link_code_handler,
+        )
+    )
+    # Other text messages continue to use the existing music search flow.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_text_handler))
 
     # Error
