@@ -16,6 +16,7 @@
 > - موارد نسخه‌های قبلی حفظ‌اند: HTTPS/TLS، اعتبارسنجی سخت‌گیرانهٔ Token، پیام شروع/راهنما، کپشن کانال و Voice Note تنظیم‌پذیر.
 > - اگر هاست متغیر محیطی PHP را پشتیبانی نمی‌کند، اعتبارنامه‌ها را از فرم مدیر افزونه وارد کنید؛ مقدارها در صفحه نمایش داده نمی‌شوند.
 > - نصب و تنظیم webhook/کانال: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md).
+> - استقرار Python polling روی AbrhaPaaS و تنظیم پورت health: [`docs/13-ABRHAPAAS-PYTHON-DEPLOYMENT.md`](docs/13-ABRHAPAAS-PYTHON-DEPLOYMENT.md).
 
 ---
 

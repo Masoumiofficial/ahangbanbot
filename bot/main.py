@@ -19,6 +19,7 @@ from telegram.ext import (
 
 from .config import BOT_TOKEN, LOG_LEVEL, RATE_LIMIT_PER_MINUTE, is_admin, validate
 from .db import check_rate_limit, init_db, is_blocked, upsert_user
+from .health_server import start_health_server
 from .handlers.admin import (
     admin_broadcast_cancel_callback,
     admin_broadcast_confirm_callback,
@@ -225,6 +226,9 @@ def build_app() -> Application:
 async def main():
     app = build_app()
     await init_db()
+    # PaaS platforms may require an HTTP port even though Telegram updates use polling.
+    # This endpoint returns only a generic health status and never exposes configuration.
+    health_server = await start_health_server()
 
     # Graceful shutdown
     stop = asyncio.Event()
@@ -246,6 +250,8 @@ async def main():
     log.info("✅ Bot is polling. Press Ctrl+C to stop.")
     await stop.wait()
     log.info("Shutting down…")
+    health_server.close()
+    await health_server.wait_closed()
     await app.updater.stop()
     await app.stop()
     await app.shutdown()
