@@ -57,12 +57,26 @@ async def artists_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.callback_query.answer("جست‌وجو منقضی شده است.", show_alert=True)
             await update.callback_query.edit_message_text("جست‌وجوی خواننده منقضی شده؛ دوباره نام را بنویسید.")
             return
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text("⏳ در حال بارگذاری خوانندگان…")
-        chat = update.callback_query.message.chat
+        query = update.callback_query
+        await query.answer()
+        callback_message = query.message
+        has_media = bool(
+            callback_message
+            and any(getattr(callback_message, kind, None) for kind in ("photo", "video", "audio", "document"))
+        )
+        if has_media:
+            # Telegram cannot edit a media message's text. Keep the menu/card intact and
+            # render the list in a new text reply instead of bubbling BadRequest globally.
+            loading_message = await callback_message.reply_text("⏳ در حال بارگذاری خوانندگان…")
 
-        async def send_fn(text, **kwargs):
-            return await update.callback_query.edit_message_text(text, **kwargs)
+            async def send_fn(text, **kwargs):
+                return await loading_message.edit_text(text, **kwargs)
+        else:
+            await query.edit_message_text("⏳ در حال بارگذاری خوانندگان…")
+
+            async def send_fn(text, **kwargs):
+                return await query.edit_message_text(text, **kwargs)
+        chat = callback_message.chat if callback_message else update.effective_chat
     else:
         chat = update.effective_chat
 
@@ -127,7 +141,7 @@ async def artists_list_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         pagination_rows = [nav, [InlineKeyboardButton("🏠 خانه", callback_data="home")]]
     else:
         pagination_kb = artists_list_pagination(page, total_pages, letter=letter)
-        pagination_rows = pagination_kb.inline_keyboard
+        pagination_rows = list(pagination_kb.inline_keyboard)
     all_buttons = keyboard + pagination_rows
 
     await send_fn(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(all_buttons))
@@ -245,8 +259,8 @@ async def show_artist(update_or_query, context, identifier: str, page: int = 1, 
 
     # Artist pagination, sort, and follow state.
     term_kb = artist_card(term, page, total_pages, sort, is_followed=followed, follower_count=follower_count)
-    # Merge
-    all_buttons = keyboard + term_kb.inline_keyboard
+    # python-telegram-bot exposes inline_keyboard as a tuple; normalize before merging lists.
+    all_buttons = keyboard + list(term_kb.inline_keyboard)
 
     markup = InlineKeyboardMarkup(all_buttons)
 

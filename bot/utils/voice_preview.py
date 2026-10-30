@@ -17,6 +17,31 @@ _ALLOWED_DURATIONS = {15, 30, 45, 60}
 _MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 
 
+def _ffmpeg_candidates() -> list[str]:
+    """Return system FFmpeg first, then the binary bundled by imageio-ffmpeg.
+
+    Python App builders generally install Python wheels without OS packages from the
+    repository Dockerfile. The bundled fallback therefore keeps OGG/Opus previews
+    available on PaaS runtimes that do not provide a system ``ffmpeg`` command.
+    """
+    candidates = []
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        candidates.append(system_ffmpeg)
+
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+
+        bundled_ffmpeg = get_ffmpeg_exe()
+    except (ImportError, OSError, RuntimeError) as exc:
+        log.debug("bundled FFmpeg is unavailable (%s)", type(exc).__name__)
+    else:
+        if bundled_ffmpeg and bundled_ffmpeg not in candidates:
+            candidates.append(bundled_ffmpeg)
+
+    return candidates
+
+
 def normalize_channel_target(value: object) -> str:
     """Accept only Telegram channel usernames or numeric supergroup/channel IDs."""
     target = str(value or "").strip()
@@ -142,8 +167,12 @@ async def send_python_voice_preview(
     if not candidates:
         return {"status": "unavailable", "reason": "no_audio_source"}
 
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg or not await _ffmpeg_supports_opus(ffmpeg):
+    ffmpeg = None
+    for candidate in _ffmpeg_candidates():
+        if await _ffmpeg_supports_opus(candidate):
+            ffmpeg = candidate
+            break
+    if not ffmpeg:
         return {"status": "unavailable", "reason": "ffmpeg_or_libopus_missing"}
 
     last_failure = "source_or_conversion_failed"

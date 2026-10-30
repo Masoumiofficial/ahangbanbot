@@ -1,20 +1,23 @@
-# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.6.3
+# 🎶 ربات تلگرام آهنگ‌بان — نسخهٔ 1.6.5
 
 > **برند:** آهنگ‌بان (AhangBan) — https://ahangban.ir  
 > **زبان:** فارسی · **جهت:** RTL · **منبع حقیقت آثار/هنرمندان:** دیتابیس وردپرس آهنگ‌بان
 > **ترجیحات پسند و دنبال‌کردن:** SQLite محلی ربات (بدون کپی دیتابیس وردپرس)
 > **قالب مرجع:** `javan-seda v3.0.1` · **برند کیت:** `Masoumiofficial/ahangban` (#185ADB)
+> **گزارش اتصال حساب Taranehyar v3.11.0:** [`docs/BOT-SETUP-RESULT.md`](docs/BOT-SETUP-RESULT.md) · تست زنده در دسترس این محیط نبوده است.
 
-> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.6.3
-> - **[دانلود ZIP افزونه v1.6.3](releases/ahangban-connector-1.6.3.zip)**
+> ### 📥 دانلود نسخهٔ فعلی — افزونه v1.6.5
+> - **[دانلود ZIP افزونه v1.6.5](releases/ahangban-connector-1.6.5.zip)**
 > - در **انتشار دستی کانال از Python polling**، اگر WordPress وضعیت Voice Note را `unavailable` یا `failed` برگرداند، ربات یک‌بار با FFmpeg/libopus خودش تبدیل و ارسال می‌کند؛ وضعیت `queued` هرگز fallback نمی‌شود تا ویس تکراری ساخته نشود.
 > - API انتشار دستی، مقصد کانال و URLهای واقعی کیفیت‌های صوتی همان پست را فقط برای fallback کنترل‌شده برمی‌گرداند؛ webhook PHP مستقل می‌ماند.
 > - در تصویر Docker ربات FFmpeg نصب است؛ در استقرار غیر Docker، FFmpeg دارای libopus باید در محیط Python فراهم شود. نبود آن با پیام صریح گزارش می‌شود و موفقیت جعل نمی‌شود.
-> - در webhook افزونهٔ v1.6.3، update معتبر اول در صف محلی ذخیره و سریع تأیید می‌شود؛ پردازش بعدی با WP-Cron است تا درخواست کند Telegram timeout نشود. آمار صف Telegram و صف داخلی در پیشخوان جدا نمایش داده می‌شود.
+> - در webhook افزونهٔ v1.6.3، update معتبر اول در صف محلی ذخیره و سریع تأیید می‌شود؛ پردازش بعدی با WP-Cron است و آمار صف Telegram/WordPress جدا نمایش داده می‌شود.
+> - افزونهٔ v1.6.5 polling زمان‌بندی‌شدهٔ WordPress را هر ۳۰ ثانیه زمان‌بندی می‌کند؛ برای رسیدن به همین سرعت، Cron هاست نیز باید هر ۳۰ ثانیه اجرا شود. اگر هاست فقط Cron دقیقه‌ای دارد، polling همچنان کار می‌کند اما پاسخ ممکن است حدود یک دقیقه تأخیر داشته باشد. VPS لازم نیست؛ Cron و دسترسی خروجی Telegram لازم‌اند.
 > - لایک/برداشتن لایک و فهرست پسندیده‌ها، دنبال‌کردن/لغو دنبال‌کردن هنرمند بر اساس `term_id` واقعی و نمایش صفحه‌بندی‌شدهٔ ID عددی کاربران/وضعیت مسدودی برای ادمین افزوده شد.
 > - موارد نسخه‌های قبلی حفظ‌اند: HTTPS/TLS، اعتبارسنجی سخت‌گیرانهٔ Token، پیام شروع/راهنما، کپشن کانال و Voice Note تنظیم‌پذیر.
 > - اگر هاست متغیر محیطی PHP را پشتیبانی نمی‌کند، اعتبارنامه‌ها را از فرم مدیر افزونه وارد کنید؛ مقدارها در صفحه نمایش داده نمی‌شوند.
 > - نصب و تنظیم webhook/کانال: [`docs/05-DIRECTADMIN-GUIDE.md`](docs/05-DIRECTADMIN-GUIDE.md).
+> - استقرار Python polling روی AbrhaPaaS و تنظیم پورت health: [`docs/13-ABRHAPAAS-PYTHON-DEPLOYMENT.md`](docs/13-ABRHAPAAS-PYTHON-DEPLOYMENT.md).
 
 ---
 
@@ -51,6 +54,7 @@
 - فهرست الفبایی همهٔ خوانندگان (مانند `/artists/` در سایت) + فیلتر حرف + جست‌وجوی زنده
 - پسندیدن/برداشتن پسند آهنگ در کارت، شمارندهٔ لایک و فهرست صفحه‌بندی‌شدهٔ آثار پسندیده
 - دنبال‌کردن/لغو دنبال‌کردن هنرمند بر اساس `term_id` واقعی WordPress و فهرست شخصی (MVP بدون اعلان انتشار)
+- اتصال اختیاری حساب کاربری قالب Taranehyar با کد یک‌بارمصرفِ ۸کاراکتریِ ارسال‌شده به‌شکل پیام متنی؛ `/me`، `/saved` (فقط شمارندهٔ لایک موجود در API قالب)، `/follows` و `/latest` (فید دنبال‌شده‌ها) از API اختصاصی سایت استفاده می‌کنند.
 - جدیدترین‌ها و محبوب‌ترین‌های ماه (بر اساس `meta_key=views`)
 - ارسال فایل واقعی در تلگرام: دریافت مستقیم توسط تلگرام، سپس fallback امنِ دانلود/آپلود تا ۴۹ MiB؛ کش `file_id` صوت و پیوند معتبر در صورت شکست
 - پنل ادمین داخل ربات: `/admin`، آمار، سلامت، پاک‌سازی کش، فهرست کاربران با ID عددی و وضعیت مسدودی، دستورات block/unblock، پیام همگانی و انتشار دستی پست با پیش‌نمایش/تأیید
@@ -136,7 +140,7 @@ source venv/bin/activate
 pip install -r bot/requirements.txt
 
 cp .env.example .env
-nano .env   # BOT_TOKEN و AHANGBAN_API_TOKEN را پر کنید
+nano .env   # TELEGRAM_BOT_TOKEN و AHANGBAN_API_TOKEN را پر کنید
 
 python -m bot.main
 ```
@@ -151,9 +155,11 @@ python -m bot.main
 /start
 محسن یگانه
 /ping
-/latest
+/new
 /popular
 ```
+
+برای اتصال اختیاری حساب Taranehyar، پس از ورود به حساب سایت، از صفحهٔ حساب کد یک‌بارمصرف ۸کاراکتری بگیرید و همان کد را به‌صورت **پیام متنی عادی** برای ربات بفرستید. کد را به `/start` یا deep link تبدیل نکنید. پس از اتصال، `/me` خلاصهٔ حساب، `/saved` شمارندهٔ پسندیده‌ها، `/follows` خوانندگان دنبال‌شده و `/latest` فید آثار تازهٔ آن‌ها را نشان می‌دهد. قالب `v3.11.0` فقط تعداد لایک‌ها را از این API برمی‌گرداند و route فهرست آهنگ‌های لایک‌شده ندارد؛ بنابراین `/saved` فهرست ساختگی یا محلی نمایش نمی‌دهد. با `/unlink` می‌توان اتصال را قطع کرد.
 
 ---
 
@@ -161,13 +167,18 @@ python -m bot.main
 
 1. در تلگرام به [@BotFather](https://t.me/BotFather) بروید → `/newbot`
 2. نام: `آهنگ‌بان` · یوزرنیم: `ahangbanbot` (یا `ahangban_music_bot`)
-3. توکن دریافتی را در `.env` بگذارید (`BOT_TOKEN`).
+3. توکن دریافتی را در `.env` بگذارید (`TELEGRAM_BOT_TOKEN`؛ نام قدیمی `BOT_TOKEN` نیز پشتیبانی می‌شود).
 4. **دستورات پیشنهادی** (`/setcommands`):
 
 ```
 start - شروع و منوی اصلی
 search - جست‌وجوی آهنگ/خواننده
-latest - جدیدترین آهنگ‌ها
+me - خلاصهٔ حساب سایت
+saved - تعداد پسندیده‌های سایت
+follows - خوانندگان دنبال‌شده در سایت
+latest - تازه‌های خوانندگان دنبال‌شده
+unlink - قطع اتصال حساب سایت
+new - جدیدترین آهنگ‌های سایت
 popular - محبوب‌ترین‌ها
 artist - صفحهٔ خواننده
 help - راهنما
@@ -189,8 +200,10 @@ ping - سلامت اتصال
 فایل `.env` ربات Python (هرگز آن را کامیت نکنید — `.gitignore` شده است):
 
 ```env
-BOT_TOKEN=REPLACE_WITH_BOTFATHER_TOKEN
+TELEGRAM_BOT_TOKEN=REPLACE_WITH_BOTFATHER_TOKEN
 AHANGBAN_API_BASE=https://ahangban.ir/wp-json/ahangban/v1
+# Optional; defaults to https://ahangban.ir/wp-json/tara/v1 when derived from AHANGBAN_API_BASE.
+# TARA_API_BASE=https://ahangban.ir/wp-json/tara/v1
 AHANGBAN_API_TOKEN=REPLACE_WITH_64_HEX_CHARACTERS
 # شناسه واقعی ادمین‌ها را وارد کنید؛ در صورت نامشخص‌بودن خالی بگذارید.
 ADMIN_IDS=
@@ -201,8 +214,9 @@ RATE_LIMIT_PER_MINUTE=20
 
 | متغیر | توضیح |
 |---|---|
-| `BOT_TOKEN` | توکن BotFather برای Python polling؛ در حالت WordPress webhook، همین مقدار با نام `AHANGBAN_BOT_TOKEN` در PHP یا فرم افزونه تنظیم می‌شود |
+| `TELEGRAM_BOT_TOKEN` | نام استاندارد توکن BotFather برای Python polling؛ نام قدیمی `BOT_TOKEN` نیز به‌عنوان alias پذیرفته می‌شود. برای WordPress webhook، مقدار مستقل PHP با نام `AHANGBAN_BOT_TOKEN` تنظیم می‌شود |
 | `AHANGBAN_API_BASE` | فقط HTTPS؛ URL پایهٔ افزونه (بدون `/` انتهایی) |
+| `TARA_API_BASE` | اختیاری؛ API حساب قالب، پیش‌فرضِ مشتق‌شده `https://ahangban.ir/wp-json/tara/v1` |
 | `AHANGBAN_API_TOKEN` | توکن تصادفیِ دقیقاً ۶۴رقمی hex؛ برای Python باید با مقدار PHP یا مقدار فرم افزونه یکسان باشد |
 | `ADMIN_IDS` | شناسه‌های عددی ادمین با کاما (برای `/admin`, `/stats`, `/broadcast` و انتشار دستی کانال) |
 | `AHANGBAN_DB_PATH` | مسیر SQLite ربات در حالت Python (پیش‌فرض `bot/ahangban.db`) |
@@ -298,7 +312,7 @@ pip install -r bot/requirements-dev.txt
 pytest bot/tests/ -v
 ```
 
-تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پسند/دنبال‌کردن، فهرست کاربران ادمین، تبدیل/ارسال Voice Note mock و عدم fallback در وضعیت `queued` هستند. نتایج بازبینی نسخهٔ 1.6.3 و محدودیت تست زنده در [`docs/10-WEBHOOK-STARTUP-FIX-v1.6.3.md`](docs/10-WEBHOOK-STARTUP-FIX-v1.6.3.md) آمده است.
+تست‌ها شامل قرارداد API، نرمال‌سازی فارسی، امنیت URL و SSRF، middleware مسدودسازی/rate limit اتمیک، ارسال تصویر با fallback، deep-link، پسند/دنبال‌کردن، فهرست کاربران ادمین، تبدیل/ارسال Voice Note mock و عدم fallback در وضعیت `queued` هستند. نتایج polling سریع‌تر نسخهٔ 1.6.5، تنظیم Cron زیر یک دقیقه و محدودیت تست زنده در [`docs/12-WORDPRESS-CRON-POLLING-v1.6.5.md`](docs/12-WORDPRESS-CRON-POLLING-v1.6.5.md) آمده است.
 
 > FFmpeg/libopus به Docker image Python افزوده شده، اما fallback تا زمان redeploy ربات قابل استفاده نیست. در مسیر webhook PHP، همچنان FFmpeg/libopus، `proc_open` و WP-Cron روی WordPress لازم‌اند؛ وضعیت زندهٔ هاست تأیید نشده است.
 
@@ -339,7 +353,7 @@ sqlite3 bot/ahangban.db ".backup backup/ahangban-$(date +%F).db"
 | `functions.php` رمزگذاری ionCube | ✅ حل شد — افزونه مستقل، بدون دست‌زدن به قالب | — |
 | لینک رسانه در دسترس نیست | ⚠️ URLهای واقعی از دیتابیس WordPress می‌آیند | fetch امن Telegram؛ در رد قطعی، stream محدود و در نهایت لینک واقعی صفحه/منبع |
 | ارسال فایل بزرگ‌تر از سقف امن 49 MiB | ⚠️ محدودیت Bot API/هاست | ربات لینک واقعی را نشان می‌دهد؛ ارسال فایل تکراری انجام نمی‌شود |
-| هاست اشتراکی بدون اجرای دائمی Python | ✅ وب‌هوک داخلی WordPress در افزونه v1.6.3 | اعتبارنامه‌ها را از فرم افزونه یا محیط PHP تنظیم کنید؛ Voice Note این مسیر هنوز به WP-Cron و FFmpeg/proc_open در PHP نیاز دارد |
+| هاست اشتراکی بدون اجرای دائمی Python | ✅ وب‌هوک و WordPress Cron polling در افزونه v1.6.5 | Cron Job ترجیحاً هر ۳۰ ثانیه (حداقل هر دقیقه) و دسترسی خروجی به `getUpdates` لازم است؛ Voice Note مسیر PHP به WP-Cron و FFmpeg/proc_open وابسته است |
 | تغییر قالب | ✅ ربات به قالب وابسته نیست | فقط `post` + `artist` + متا |
 
 ---

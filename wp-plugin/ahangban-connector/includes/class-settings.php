@@ -155,7 +155,7 @@ class AhangBan_Settings {
 
     public static function get_mode() {
         $value = get_option( self::OPTION_MODE, 'webhook' );
-        return in_array( $value, array( 'webhook', 'polling' ), true ) ? $value : 'webhook';
+        return in_array( $value, array( 'webhook', 'polling', 'wordpress_polling' ), true ) ? $value : 'webhook';
     }
 
     public static function get_webhook_url() {
@@ -258,7 +258,7 @@ class AhangBan_Settings {
 
         if ( isset( $data['mode'] ) ) {
             $mode = sanitize_key( $data['mode'] );
-            if ( ! in_array( $mode, array( 'webhook', 'polling' ), true ) ) {
+            if ( ! in_array( $mode, array( 'webhook', 'polling', 'wordpress_polling' ), true ) ) {
                 $errors[] = 'حالت اجرا نامعتبر است.';
             } else {
                 $values[ self::OPTION_MODE ] = $mode;
