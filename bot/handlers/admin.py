@@ -294,6 +294,7 @@ async def admin_channel_publish_confirm_callback(update: Update, context: Contex
                 sources=current_sources,
                 duration=int(result.get("preview_duration") or 60),
                 download_media=_download_public_media,
+                caption=result.get("preview_caption") or "",
             )
             fallback_status = fallback.get("status")
             if fallback_status == "sent":

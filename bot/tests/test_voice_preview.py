@@ -89,6 +89,7 @@ async def test_voice_fallback_sends_one_converted_ogg_reply(tmp_path):
             sources={"128": "https://cdn.example.org/track.mp3"},
             duration=45,
             download_media=download,
+            caption="🩵 @AhangBan_ir 🩵\n\n🎧 آهنگ بان | موسیقی همیشه همراهته 🎵",
         )
 
     assert result == {"status": "sent", "message_id": 41}
@@ -102,6 +103,7 @@ async def test_voice_fallback_sends_one_converted_ogg_reply(tmp_path):
     assert isinstance(kwargs["voice"], Path)
     assert kwargs["filename"] == "ahangban-preview.ogg"
     assert kwargs["voice"].suffix == ".ogg"
+    assert kwargs["caption"] == "🩵 @AhangBan_ir 🩵\n\n🎧 آهنگ بان | موسیقی همیشه همراهته 🎵"
 
 
 @pytest.mark.asyncio

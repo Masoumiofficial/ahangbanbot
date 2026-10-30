@@ -140,6 +140,7 @@ async def send_python_voice_preview(
     sources: dict,
     duration: int,
     download_media: Callable[[str], Awaitable[tuple[str, str, str]]],
+    caption: str = "",
 ) -> dict:
     """Try conversion locally only after WordPress reports it could not queue a preview.
 
@@ -157,6 +158,8 @@ async def send_python_voice_preview(
         return {"status": "failed", "reason": "invalid_target_or_reply"}
     if duration not in _ALLOWED_DURATIONS:
         duration = 60
+    caption = caption.strip() if isinstance(caption, str) else ""
+    caption = caption[:900]
 
     candidates = []
     if isinstance(sources, dict):
@@ -186,13 +189,16 @@ async def send_python_voice_preview(
                 last_failure = "conversion_failed"
                 continue
             try:
-                sent_message = await bot.send_voice(
-                    chat_id=target,
-                    voice=Path(output_path),
-                    filename="ahangban-preview.ogg",
-                    duration=duration,
-                    reply_to_message_id=reply_id,
-                )
+                send_kwargs = {
+                    "chat_id": target,
+                    "voice": Path(output_path),
+                    "filename": "ahangban-preview.ogg",
+                    "duration": duration,
+                    "reply_to_message_id": reply_id,
+                }
+                if caption:
+                    send_kwargs["caption"] = caption
+                sent_message = await bot.send_voice(**send_kwargs)
             except (BadRequest, Forbidden, InvalidToken) as exc:
                 log.warning("Telegram definitively rejected voice preview: %s", type(exc).__name__)
                 return {"status": "failed", "reason": type(exc).__name__}

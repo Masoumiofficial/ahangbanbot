@@ -211,6 +211,7 @@ class AhangBan_Telegram {
             'preview_status' => $preview_status,
             'preview_sources' => in_array( $preview_status, array( 'unavailable', 'failed' ), true ) ? self::channel_preview_source_urls( $song ) : array(),
             'preview_duration' => AhangBan_Settings::is_channel_preview_enabled() ? AhangBan_Settings::get_channel_preview_seconds() : 0,
+            'preview_caption' => AhangBan_Settings::is_channel_preview_enabled() ? AhangBan_Settings::get_channel_voice_caption() : '',
         );
     }
 
@@ -580,6 +581,8 @@ class AhangBan_Telegram {
             'voice' => new CURLFile( $file['path'], 'audio/ogg', 'ahangban-preview.ogg' ),
             'reply_to_message_id' => (string) (int) $reply_to_message_id,
         );
+        $caption = AhangBan_Settings::get_channel_voice_caption();
+        if ( '' !== $caption ) { $fields['caption'] = $caption; }
         if ( is_array( $keyboard ) ) { $fields['reply_markup'] = wp_json_encode( $keyboard, JSON_UNESCAPED_UNICODE ); }
         $handle = curl_init( 'https://api.telegram.org/bot' . $token . '/sendVoice' );
         if ( false === $handle ) { return new WP_Error( 'telegram_voice_init', 'آغاز بارگذاری ویس در تلگرام ممکن نشد.' ); }

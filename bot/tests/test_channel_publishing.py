@@ -250,6 +250,7 @@ async def test_unavailable_wordpress_preview_uses_python_fallback_with_current_s
         "preview_status": "unavailable",
         "preview_duration": 45,
         "preview_sources": {"128": "https://cdn.example.org/current.mp3"},
+        "preview_caption": "🩵 @AhangBan_ir 🩵\n\n🎧 آهنگ بان | موسیقی همیشه همراهته 🎵",
     })
     fallback = AsyncMock(return_value={"status": "sent", "message_id": 100})
     with patch("bot.handlers.admin.is_admin", return_value=True), patch(
@@ -262,4 +263,5 @@ async def test_unavailable_wordpress_preview_uses_python_fallback_with_current_s
     assert fallback.await_args.kwargs["reply_to_message_id"] == 99
     assert fallback.await_args.kwargs["sources"] == {"128": "https://cdn.example.org/current.mp3"}
     assert fallback.await_args.kwargs["duration"] == 45
+    assert fallback.await_args.kwargs["caption"] == "🩵 @AhangBan_ir 🩵\n\n🎧 آهنگ بان | موسیقی همیشه همراهته 🎵"
     assert any("با ربات Python" in text and "100" in text for text, _ in query.edits)

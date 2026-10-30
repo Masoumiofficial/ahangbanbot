@@ -177,6 +177,7 @@ class AhangBan_Admin {
                 'channel_preview_enabled' => isset( $_POST['channel_preview_enabled'] ) ? wp_unslash( $_POST['channel_preview_enabled'] ) : '0',
                 'channel_preview_seconds' => isset( $_POST['channel_preview_seconds'] ) ? wp_unslash( $_POST['channel_preview_seconds'] ) : '60',
                 'channel_caption_footer' => isset( $_POST['channel_caption_footer'] ) ? wp_unslash( $_POST['channel_caption_footer'] ) : '',
+                'channel_voice_caption' => isset( $_POST['channel_voice_caption'] ) ? wp_unslash( $_POST['channel_voice_caption'] ) : '',
             ) );
             if ( empty( $errors ) ) {
                 add_settings_error( 'ahangban_connector', 'channel_saved', '✅ تنظیمات کانال ذخیره شد. برای انتشار واقعی، ربات باید مدیر کانال باشد.', 'updated' );
@@ -408,6 +409,7 @@ class AhangBan_Admin {
         $channel_preview_enabled = AhangBan_Settings::is_channel_preview_enabled();
         $channel_preview_seconds = AhangBan_Settings::get_channel_preview_seconds();
         $channel_caption_footer = AhangBan_Settings::get_channel_caption_footer();
+        $channel_voice_caption = AhangBan_Settings::get_channel_voice_caption();
         $channel_preview_ready = $channel_preview_enabled && AhangBan_Telegram::is_channel_preview_renderer_available();
         $taxonomy = AhangBan_Search::get_taxonomy();
         $taxonomy_exists = taxonomy_exists( $taxonomy );
@@ -569,7 +571,8 @@ class AhangBan_Admin {
                         <tr><th scope="row">انتشار خودکار</th><td><input type="hidden" name="channel_auto_post" value="0"><label><input type="checkbox" name="channel_auto_post" value="1" <?php checked( $channel_auto_post ); ?>> پس از انتشار اثر موسیقی جدید، در کانال اطلاع‌رسانی شود</label></td></tr>
                         <tr><th scope="row">پیش‌نمایش ویس</th><td><input type="hidden" name="channel_preview_enabled" value="0"><label><input type="checkbox" name="channel_preview_enabled" value="1" <?php checked( $channel_preview_enabled ); ?>> پس از کارت کانال، نمونهٔ صوتی به‌صورت reply ارسال شود</label><p class="description">این گزینه روی انتشار خودکار و انتشار دستی اثر می‌گذارد؛ خاموش‌کردن آن پست اصلی را متوقف نمی‌کند.</p></td></tr>
                         <tr><th scope="row"><label for="channel_preview_seconds">مدت پیش‌نمایش</label></th><td><select id="channel_preview_seconds" name="channel_preview_seconds"><?php foreach ( array( 15, 30, 45, 60 ) as $seconds ) : ?><option value="<?php echo esc_attr( $seconds ); ?>" <?php selected( $channel_preview_seconds, $seconds ); ?>><?php echo esc_html( $seconds ); ?> ثانیه</option><?php endforeach; ?></select><p class="description">از ابتدای فایل صوتی واقعی ۱۲۸ یا ۳۲۰ ساخته می‌شود.</p></td></tr>
-                        <tr><th scope="row"><label for="channel_caption_footer">متن تکمیلی کپشن کانال</label></th><td><textarea id="channel_caption_footer" name="channel_caption_footer" rows="2" maxlength="180" class="large-text" placeholder="اختیاری؛ حداکثر ۱۸۰ نویسه"><?php echo esc_textarea( $channel_caption_footer ); ?></textarea><p class="description">به کپشن انتشار دستی و خودکار افزوده می‌شود؛ متن ساده است و برای جلوگیری از HTML ناامن escape می‌شود.</p></td></tr>
+                        <tr><th scope="row"><label for="channel_caption_footer">متن تکمیلی کپشن کانال</label></th><td><textarea id="channel_caption_footer" name="channel_caption_footer" rows="2" maxlength="180" class="large-text" placeholder="اختیاری؛ حداکثر ۱۸۰ نویسه"><?php echo esc_textarea( $channel_caption_footer ); ?></textarea><p class="description">به کپشن کارت/پست کانال در انتشار دستی و خودکار افزوده می‌شود؛ این گزینه روی کپشن Voice Note اثر نمی‌گذارد.</p></td></tr>
+                        <tr><th scope="row"><label for="channel_voice_caption">کپشن پیش‌نمایش ویس کانال</label></th><td><textarea id="channel_voice_caption" name="channel_voice_caption" rows="3" maxlength="900" class="large-text" placeholder="برای ارسال ویس بدون کپشن، خالی بگذارید"><?php echo esc_textarea( $channel_voice_caption ); ?></textarea><p class="description">فقط برای پیام صوتی پیش‌نمایش به‌صورت reply استفاده می‌شود (حداکثر ۹۰۰ نویسه؛ متن ساده). این مقدار در مسیر PHP و جایگزین ربات Python یکسان است؛ خالی‌گذاشتن آن کپشن را حذف می‌کند.</p></td></tr>
                     </table>
                     <button type="submit" class="button button-primary">ذخیرهٔ تنظیمات کانال</button>
                 </form>

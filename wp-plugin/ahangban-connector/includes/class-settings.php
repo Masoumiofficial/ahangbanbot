@@ -27,6 +27,8 @@ class AhangBan_Settings {
     const OPTION_CHANNEL_PREVIEW_ENABLED = 'ahangban_channel_preview_enabled';
     const OPTION_CHANNEL_PREVIEW_SECONDS = 'ahangban_channel_preview_seconds';
     const OPTION_CHANNEL_CAPTION_FOOTER = 'ahangban_channel_caption_footer';
+    const OPTION_CHANNEL_VOICE_CAPTION = 'ahangban_channel_voice_caption';
+    const DEFAULT_CHANNEL_VOICE_CAPTION = "🩵 @AhangBan_ir 🩵\n\n🎧 آهنگ بان | موسیقی همیشه همراهته 🎵";
     const OPTION_SECRET_MIGRATION = 'ahangban_env_secrets_migrated';
 
     public static function init() {
@@ -137,6 +139,10 @@ class AhangBan_Settings {
 
     public static function get_channel_caption_footer() {
         return trim( (string) get_option( self::OPTION_CHANNEL_CAPTION_FOOTER, '' ) );
+    }
+
+    public static function get_channel_voice_caption() {
+        return trim( (string) get_option( self::OPTION_CHANNEL_VOICE_CAPTION, self::DEFAULT_CHANNEL_VOICE_CAPTION ) );
     }
 
     public static function normalize_channel_target( $target ) {
@@ -357,6 +363,15 @@ class AhangBan_Settings {
                 $errors[] = 'متن پایانی کپشن کانال حداکثر می‌تواند ۱۸۰ نویسه باشد.';
             } else {
                 $values[ self::OPTION_CHANNEL_CAPTION_FOOTER ] = $footer;
+            }
+        }
+
+        if ( array_key_exists( 'channel_voice_caption', $data ) ) {
+            $caption = sanitize_textarea_field( (string) $data['channel_voice_caption'] );
+            if ( self::text_length( $caption ) > 900 ) {
+                $errors[] = 'کپشن ویس حداکثر می‌تواند ۹۰۰ نویسه باشد.';
+            } else {
+                $values[ self::OPTION_CHANNEL_VOICE_CAPTION ] = $caption;
             }
         }
 
