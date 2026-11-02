@@ -215,6 +215,42 @@ class AhangBan_Telegram {
         );
     }
 
+    /** Publish one official radio link through the channel target configured in WordPress. */
+    public static function publish_radio_link() {
+        $target = AhangBan_Settings::normalize_channel_target( AhangBan_Settings::get_channel_target() );
+        if ( '' === $target ) {
+            return new WP_Error( 'channel_unconfigured', 'ابتدا کانال را در پیشخوان WordPress → آهنگ‌بان API تنظیم کنید.', array( 'status' => 409 ) );
+        }
+        if ( '' === AhangBan_Settings::get_bot_token() ) {
+            return new WP_Error( 'bot_unconfigured', 'توکن ربات در محیط PHP یا تنظیمات افزونه پیکربندی نشده است.', array( 'status' => 409 ) );
+        }
+
+        $radio_url = 'https://ahangban.ir/radio/';
+        $keyboard = array(
+            'inline_keyboard' => array(
+                array( array( 'text' => '▶️ شنیدن رادیوی آنلاین', 'url' => $radio_url ) ),
+            ),
+        );
+        $response = self::send(
+            $target,
+            "📻 رادیوی آنلاین آهنگ‌بان\n\nبرای شنیدن، دکمهٔ زیر را بزنید.",
+            $keyboard,
+            null
+        );
+        if ( is_wp_error( $response ) ) {
+            return new WP_Error( 'radio_link_delivery_unknown', 'نتیجهٔ ارسال لینک رادیو نامشخص است؛ کانال را بررسی کنید و از ارسال تکراری خودداری کنید.', array( 'status' => 502 ) );
+        }
+        if ( ! self::telegram_ok( $response ) ) {
+            return new WP_Error( 'radio_link_send_failed', 'تلگرام لینک رادیو را نپذیرفت؛ دسترسی ربات به کانال را بررسی کنید.', array( 'status' => 400 ) );
+        }
+
+        $message_id = (int) ( $response['result']['message_id'] ?? 0 );
+        if ( $message_id <= 0 ) {
+            return new WP_Error( 'radio_link_delivery_unknown', 'پاسخ تلگرام شناسهٔ پیام را نداشت؛ کانال را بررسی کنید و از ارسال تکراری خودداری کنید.', array( 'status' => 502 ) );
+        }
+        return array( 'status' => 'sent', 'message_id' => $message_id );
+    }
+
     private static function mark_channel_announcement_sent( $post_id, $response ) {
         $message_id = is_array( $response ) ? (int) ( $response['result']['message_id'] ?? 0 ) : 0;
         update_post_meta( (int) $post_id, '_ahangban_tg_channel_announcement_status', 'sent' );

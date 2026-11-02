@@ -1,5 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
+from ..config import RADIO_PAGE_URL
+
 
 # ---------- Main menu (ReplyKeyboard for easy access) ----------
 def main_reply_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -33,6 +35,7 @@ def main_inline(is_admin: bool = False) -> InlineKeyboardMarkup:
             InlineKeyboardButton("❤️ پسندیده‌ها", callback_data="favorites:page:1"),
             InlineKeyboardButton("🔔 هنرمندان دنبال‌شده", callback_data="artist_follows:page:1"),
         ],
+        [InlineKeyboardButton("📻 رادیوی آنلاین", url=RADIO_PAGE_URL)],
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
     ]
     if is_admin:

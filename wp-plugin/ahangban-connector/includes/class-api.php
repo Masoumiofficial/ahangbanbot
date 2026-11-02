@@ -43,6 +43,12 @@ class AhangBan_API {
             ),
         ) );
 
+        register_rest_route( self::NS, '/channel/radio', array(
+            'methods' => 'POST',
+            'callback' => array( __CLASS__, 'channel_radio' ),
+            'permission_callback' => array( __CLASS__, 'check_auth' ),
+        ) );
+
         register_rest_route( self::NS, '/artists', array(
             'methods' => 'GET',
             'callback' => array( __CLASS__, 'artists' ),
@@ -129,6 +135,11 @@ class AhangBan_API {
             return new WP_Error( 'invalid_post_id', 'شناسهٔ پست نامعتبر است.', array( 'status' => 400 ) );
         }
         $result = AhangBan_Telegram::publish_channel_post( $post_id );
+        return is_wp_error( $result ) ? $result : rest_ensure_response( $result );
+    }
+
+    public static function channel_radio( WP_REST_Request $request ) {
+        $result = AhangBan_Telegram::publish_radio_link();
         return is_wp_error( $result ) ? $result : rest_ensure_response( $result );
     }
 

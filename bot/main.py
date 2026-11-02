@@ -22,6 +22,7 @@ from telegram.ext import (
 from .config import BOT_TOKEN, LOG_LEVEL, RATE_LIMIT_PER_MINUTE, is_admin, validate
 from .db import check_rate_limit, init_db, is_blocked, upsert_user
 from .health_server import start_health_server
+from .utils.radio_stream import radio_stream_configured, radio_stream_requested, run_radio_stream
 from .handlers.account import (
     account_feed_handler,
     account_follows_handler,
@@ -89,6 +90,7 @@ from .handlers.start import (
     search_prompt_callback,
     start_handler,
 )
+from .handlers.radio import radio_handler, radio_post_handler
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -184,6 +186,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("ping", ping_handler))
+    app.add_handler(CommandHandler("radio", radio_handler))
+    app.add_handler(CommandHandler("radio_post", radio_post_handler))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("song", song_command))
     app.add_handler(CommandHandler("latest", account_feed_handler))
@@ -284,9 +288,22 @@ async def main():
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=False,
     )
+    radio_task = None
+    if radio_stream_requested():
+        if radio_stream_configured():
+            radio_task = asyncio.create_task(run_radio_stream(), name="radio-stream")
+            log.info("Radio live-stream worker enabled.")
+        else:
+            log.warning("Radio live-stream worker not started: its runtime settings are incomplete.")
     log.info("✅ Bot is polling. Press Ctrl+C to stop.")
     await stop.wait()
     log.info("Shutting down…")
+    if radio_task:
+        radio_task.cancel()
+        try:
+            await radio_task
+        except asyncio.CancelledError:
+            pass
     health_server.close()
     await health_server.wait_closed()
     await app.updater.stop()

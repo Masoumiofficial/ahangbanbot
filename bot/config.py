@@ -50,6 +50,10 @@ AHANGBAN_API_BASE = _env("AHANGBAN_API_BASE", "https://ahangban.ir/wp-json/ahang
 TARA_API_BASE = _env("TARA_API_BASE") or _derive_tara_api_base(AHANGBAN_API_BASE)
 TARA_API_BASE = TARA_API_BASE.rstrip("/")
 AHANGBAN_API_TOKEN = _env("AHANGBAN_API_TOKEN")
+RADIO_PAGE_URL = "https://ahangban.ir/radio/"
+RADIO_STREAM_URL = _env("RADIO_STREAM_URL")
+RADIO_RTMP_SERVER = _env("RADIO_RTMP_SERVER")
+RADIO_RTMP_KEY = _env("RADIO_RTMP_KEY")
 ADMIN_IDS = [int(value.strip()) for value in _env("ADMIN_IDS", "").split(",") if value.strip().isdigit()]
 LOG_LEVEL = _env("LOG_LEVEL", "INFO")
 CACHE_TTL = int(_env("CACHE_TTL", "300") or 300)
@@ -101,6 +105,8 @@ def validate() -> list[str]:
         errors.append("AHANGBAN_API_BASE باید یک URL عمومی HTTPS بدون credential باشد")
     if not _is_public_https_base(TARA_API_BASE):
         errors.append("TARA_API_BASE باید یک URL عمومی HTTPS بدون credential باشد")
+    if not _is_public_https_base(RADIO_PAGE_URL):
+        errors.append("RADIO_PAGE_URL باید یک URL عمومی HTTPS بدون credential باشد")
 
     if not re.fullmatch(r"[a-fA-F0-9]{64}", AHANGBAN_API_TOKEN):
         errors.append("AHANGBAN_API_TOKEN باید دقیقاً ۶۴ رقم hex و با توکن تنظیم‌شده در WordPress یکسان باشد")

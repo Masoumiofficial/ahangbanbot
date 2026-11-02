@@ -319,6 +319,16 @@ class AhangBanAPI:
             max_attempts=1,
         )
 
+    async def publish_radio_link(self) -> dict:
+        """Ask WordPress to post the official radio link to its configured Telegram channel once."""
+        return await self._request(
+            "POST",
+            "channel/radio",
+            use_cache=False,
+            json_body={},
+            max_attempts=1,
+        )
+
     # ---- Taranehyar account API methods (tara/v1) ----
 
     async def account_link(self, code: str, telegram_id: int, username: str = "", first_name: str = "") -> dict:

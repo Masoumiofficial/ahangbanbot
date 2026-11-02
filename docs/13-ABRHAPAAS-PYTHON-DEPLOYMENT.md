@@ -12,6 +12,7 @@
 | Sub-domain | `ahangbanbot-worker` (دامنه برای health check پنل است؛ Telegram از آن استفاده نمی‌کند) |
 | نسخهٔ Python | `3.11-ubi9` |
 | application port | `8000` |
+| Python context directory | `/` |
 | Build command | `pip install -r requirements.txt` (if the panel requires one) |
 | Start command | `python app.py` |
 | Build variables | خالی بگذارید |
@@ -38,7 +39,17 @@
 | `LOG_LEVEL` | `INFO` |
 | `CACHE_TTL` | `300` |
 | `RATE_LIMIT_PER_MINUTE` | `20` |
+| `RADIO_STREAM_URL` | آدرس مستقیم HTTPS صوت رادیو (اختیاری؛ آدرس صفحهٔ `/radio/` نیست) |
+| `RADIO_RTMP_SERVER` | نشانی RTMP/RTMPS که Telegram برای Live Stream کانال می‌دهد (اختیاری) |
+| `RADIO_RTMP_KEY` | کلید Live Stream تلگرام؛ Secret است و فقط در Runtime Variables قرار بگیرد |
 | `AHANGBAN_DB_PATH` | فقط اگر PaaS دیسک پایدار متصل می‌کند، مسیر قابل‌نوشتن همان disk؛ مسیر را حدس نزنید |
+
+### رادیوی آنلاین
+
+- فرمان عمومی `/radio` و دکمهٔ منوی اصلی، صفحهٔ `https://ahangban.ir/radio/` را باز می‌کنند.
+- ادمین می‌تواند `/radio_post` را در گفتگوی خصوصی ربات اجرا کند. افزونهٔ WordPress **v1.6.7 یا جدیدتر** یک پیام لینک‌دار را با مقصد کانال تنظیم‌شده در WordPress منتشر می‌کند؛ ربات باید مجاز به ارسال در کانال باشد. پس از انتشار، پیام را در Telegram سنجاق کنید تا لینک همیشه در دسترس باشد.
+- این پیام لینک است، نه پخش صدای زنده داخل Telegram. Bot API به‌تنهایی Live Stream ایجاد نمی‌کند. برای پخش ۲۴/۷ باید در کانال یک Live Stream با قابلیت ورودی استریم باز باشد و آدرس مستقیم صوت (HLS/MP3 روی HTTPS) را در `RADIO_STREAM_URL`، سرور RTMP و کلیدِ همان Live Stream را در دو متغیر جداگانه قرار دهید. **کلید را در گفتگو یا Git نفرستید.** صفحهٔ وب `/radio/` به‌تنهایی آدرس مستقیم صوت نیست.
+- وقتی هر سه متغیر `RADIO_STREAM_URL`, `RADIO_RTMP_SERVER`, `RADIO_RTMP_KEY` پیکربندی شوند، worker اختیاری FFmpeg با پس‌زمینهٔ تصویری سادهٔ آبی و صدای AAC به Live Stream می‌فرستد؛ در غیر این صورت ربات عادی بالا می‌آید و پخش ۲۴/۷ خاموش می‌ماند. این worker نمی‌تواند یک Live Stream بسته‌شده را از نو در Telegram ایجاد کند؛ پس از پایان نشست، نشست تازه و کلید تازه لازم است. PaaS باید پردازش طولانی‌مدت و اتصال خروجی RTMP/RTMPS را مجاز بداند.
 
 SQLite ربات برای کاربرها، پسندها، دنبال‌کردن هنرمند و cache محلی است. اگر PaaS فایل‌سیستم موقت دارد، در مرحلهٔ منابع یک Persistent Disk اضافه کنید و `AHANGBAN_DB_PATH` را به مسیر mount آن بگذارید؛ در غیر این صورت این داده‌ها ممکن است با redeploy از بین بروند. دادهٔ اصلی موسیقی همچنان از WordPress می‌آید.
 
