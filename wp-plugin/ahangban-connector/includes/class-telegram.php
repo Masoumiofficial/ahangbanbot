@@ -303,6 +303,14 @@ class AhangBan_Telegram {
         $footer = AhangBan_Settings::get_channel_caption_footer();
         if ( '' !== $footer ) { $caption .= "\n\n" . self::esc( $footer ); }
         $caption .= "\n\n🆔️ @Ahangban_ir 💙";
+
+        // A stable hashtag containing the real WordPress post ID makes channel posts searchable.
+        $post_id = (int) ( $song['id'] ?? 0 );
+        if ( $post_id > 0 ) {
+            $post_hashtag = '#ahangban_post_' . $post_id;
+            $prefix_limit = max( 0, 900 - self::text_length( "\n\n" . $post_hashtag ) );
+            return self::text_limit( $caption, $prefix_limit ) . "\n\n" . $post_hashtag;
+        }
         return self::text_limit( $caption, 900 );
     }
 
