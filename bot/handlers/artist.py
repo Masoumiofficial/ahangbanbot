@@ -4,11 +4,14 @@ import logging
 import math
 import uuid
 
+import httpx
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from ..api_client import APIError, api
+from ..config import BIOGRAPHY_PAGE_URL
 from ..db import (
     count_artist_followers,
     increment_stat,
@@ -17,7 +20,7 @@ from ..db import (
     remove_artist_follow,
     toggle_artist_follow,
 )
-from ..utils.formatters import artist_caption, song_list_item
+from ..utils.formatters import artist_biography_text, artist_caption, song_list_item
 from ..utils.keyboards import artist_card, artists_list_pagination
 from .song import _send_card_photo
 
@@ -156,6 +159,121 @@ async def artist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     identifier = " ".join(context.args).strip()
     await show_artist(update, context, identifier, page=1, sort="new")
+
+
+async def artist_biography_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Open the biography index, or fetch one artist's full WordPress biography."""
+    if not context.args:
+        markup = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("📖 فهرست بیوگرافی هنرمندان", url=BIOGRAPHY_PAGE_URL)],
+                [InlineKeyboardButton("🔍 جست‌وجوی هنرمند", callback_data="prompt:artist")],
+            ]
+        )
+        await update.effective_message.reply_text(
+            "📖 برای مرور بیوگرافی‌ها یک هنرمند را در فهرست سایت انتخاب کنید، "
+            "یا نام او را بعد از /biography بنویسید تا متن کامل ثبت‌شده در سایت نمایش داده شود.",
+            reply_markup=markup,
+        )
+        return
+    identifier = " ".join(context.args).strip()
+    await _display_artist_biography(update, identifier)
+
+
+async def artist_biography_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    parts = (query.data or "").split(":")
+    if len(parts) != 4 or not parts[1].isdigit() or not parts[2].isdigit():
+        await query.answer("درخواست بیوگرافی نامعتبر است.", show_alert=True)
+        return
+    term_id = int(parts[1])
+    page = max(1, int(parts[2]))
+    sort = parts[3] if parts[3] in ("new", "old", "title") else "new"
+    await query.answer()
+    await _display_artist_biography(
+        update,
+        str(term_id),
+        query=query,
+        return_page=page,
+        return_sort=sort,
+    )
+
+
+async def _display_artist_biography(
+    update: Update,
+    identifier: str,
+    *,
+    query=None,
+    return_page: int = 1,
+    return_sort: str = "new",
+):
+    message = query.message if query else update.effective_message
+    try:
+        response = await api.artist(identifier, page=1, per_page=1, sort="new")
+    except APIError:
+        log.warning("WordPress artist biography request failed")
+        response = None
+    except (httpx.HTTPError, ValueError):
+        log.warning("WordPress artist biography transport/response error")
+        response = None
+
+    term = (response or {}).get("term") or {}
+    if not term:
+        await message.reply_text(
+            "❌ بیوگرافی دریافت نشد؛ نام هنرمند را بررسی کنید و دوباره تلاش کنید."
+        )
+        return
+
+    text = artist_biography_text(term)
+    rows = []
+    if term.get("link"):
+        rows.append([InlineKeyboardButton("📚 بیوگرافی و آثار در سایت", url=term["link"])])
+    else:
+        rows.append([InlineKeyboardButton("📖 فهرست بیوگرافی هنرمندان", url=BIOGRAPHY_PAGE_URL)])
+    raw_term_id = term.get("term_id")
+    if str(raw_term_id or "").isdigit() and int(raw_term_id) > 0:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🎤 بازگشت به آثار هنرمند",
+                    callback_data=f"artist:{int(raw_term_id)}:{max(1, return_page)}:{return_sort}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
+    markup = InlineKeyboardMarkup(rows)
+
+    if not query:
+        await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True)
+        return
+
+    if getattr(message, "photo", None):
+        if len(text) <= 1000:
+            try:
+                await query.edit_message_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=markup)
+                return
+            except TelegramError as exc:
+                if "message is not modified" in str(exc).lower():
+                    return
+                log.warning("could not replace artist caption with biography: %s", type(exc).__name__)
+        try:
+            await message.delete()
+        except TelegramError as exc:
+            log.debug("could not remove old artist photo before sending biography (%s)", type(exc).__name__)
+        await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True)
+        return
+
+    try:
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+    except TelegramError as exc:
+        if "message is not modified" not in str(exc).lower():
+            log.warning("could not edit artist card to show biography: %s", type(exc).__name__)
+            await message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup, disable_web_page_preview=True)
 
 # ---- Artist detail ----
 async def artist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

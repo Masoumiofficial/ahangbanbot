@@ -1621,6 +1621,11 @@ class AhangBan_Telegram {
                 case '/start': self::handle_start( $chat, $msg, $arg ); return;
                 case '/help': self::handle_help( $chat, $from_id ); return;
                 case '/ping': self::handle_ping( $chat ); return;
+                case '/news': self::handle_news( $chat ); return;
+                case '/biography':
+                case '/bio':
+                    if ( '' === $arg ) { self::handle_biography_index( $chat ); return; }
+                    self::handle_biography_search( $chat, $arg ); return;
                 case '/latest': self::handle_latest( $chat, 1 ); return;
                 case '/popular': self::handle_popular( $chat, 1 ); return;
                 case '/search':
@@ -1685,13 +1690,20 @@ class AhangBan_Telegram {
             return str_replace( '%first_name%', self::esc( trim( (string) $name ) ), $text );
         }
         $n = $name ? ' ' . self::esc( $name ) : '';
-        return "سلام{$n} عزیز! 👋\n\nبه <b>ربات رسمی آهنگ‌بان</b> خوش آمدید 🎶\nاینجا جدیدترین آهنگ‌ها را جست‌وجو، گوش دهید و دانلود کنید — مستقیم از آرشیو واقعی سایت.\n\n✨ امکانات:\n• 🔍 جست‌وجو بر اساس نام آهنگ یا خواننده\n• 🎤 مرور همهٔ خوانندگان الفبایی\n• 🆕 جدیدترین و 🔥 محبوب‌ترین\n• 💿 کیفیت ۱۲۸/۳۲۰ + ویدیو\n• 📝 متن ترانه و آثار مرتبط\n\nنام آهنگ یا خواننده را بنویسید یا یکی از دکمه‌ها را بزنید.";
+        return "سلام{$n} عزیز! 👋\n\nبه <b>ربات رسمی آهنگ‌بان</b> خوش آمدید 🎶\nاینجا جدیدترین آهنگ‌ها را جست‌وجو، گوش دهید و دانلود کنید — مستقیم از آرشیو واقعی سایت.\n\n✨ امکانات:\n• 🔍 جست‌وجو بر اساس نام آهنگ یا خواننده\n• 🎤 مرور همهٔ خوانندگان الفبایی\n• 🆕 جدیدترین و 🔥 محبوب‌ترین\n• 💿 کیفیت ۱۲۸/۳۲۰ + ویدیو\n• 📰 اخبار آهنگ‌بان\n• 📖 بیوگرافی کامل هنرمندان از کارت خواننده\n• 📝 متن ترانه و آثار مرتبط\n\nنام آهنگ یا خواننده را بنویسید یا یکی از دکمه‌ها را بزنید.";
     }
 
     private static function help_text() {
         $custom = AhangBan_Settings::get_bot_help_message();
         if ( '' !== $custom ) { return self::esc( $custom ); }
-        return "ℹ️ <b>راهنمای ربات آهنگ‌بان</b>\n\n🔍 <b>جست‌وجو:</b> نام آهنگ/خواننده را تایپ کن.\n🎤 <b>فهرست خوانندگان:</b> دکمهٔ «فهرست خوانندگان».\n🆕 <b>جدیدترین / محبوب:</b> آخرین یا پرشنونده‌ترین.\n🎵 <b>کارت آهنگ:</b> کاور + کیفیت‌ها + متن + صفحه سایت.\n\n📌 دستورات:\n/start — شروع\n/search &lt;عبارت&gt;\n/latest — جدیدترین\n/popular — محبوب‌ترین\n/artist &lt;نام&gt;\n/help\n/ping\n\n🔗 https://ahangban.ir";
+        return "ℹ️ <b>راهنمای ربات آهنگ‌بان</b>\n\n"
+            . "🔍 <b>جست‌وجو:</b> نام آهنگ/خواننده را تایپ کن.\n"
+            . "🎤 <b>فهرست خوانندگان:</b> دکمهٔ «فهرست خوانندگان».\n"
+            . "📖 <b>بیوگرافی:</b> از کارت هنرمند «بیوگرافی کامل» را بزن یا /biography نام هنرمند را بفرست.\n"
+            . "📰 <b>اخبار:</b> /news بخش رسمی اخبار آهنگ‌بان را باز می‌کند.\n"
+            . "🆕 <b>جدیدترین / محبوب:</b> آخرین یا پرشنونده‌ترین.\n"
+            . "🎵 <b>کارت آهنگ:</b> کاور + کیفیت‌ها + متن + صفحه سایت.\n\n"
+            . "📌 دستورات:\n/start — شروع\n/news — اخبار\n/biography [نام هنرمند] — فهرست یا بیوگرافی کامل\n/search &lt;عبارت&gt;\n/latest — جدیدترین\n/popular — محبوب‌ترین\n/artist &lt;نام&gt;\n/help\n/ping\n\n🔗 https://ahangban.ir";
     }
 
     private static function main_kb( $is_admin = false ) {
@@ -1715,6 +1727,10 @@ class AhangBan_Telegram {
             $artists[] = array( 'text' => '🎤 همهٔ خوانندگان', 'callback_data' => 'artists:page:1' );
         }
         if ( $artists ) { $rows[] = $artists; }
+        $rows[] = array(
+            array( 'text' => '📰 اخبار', 'url' => 'https://ahangban.ir/news/' ),
+            array( 'text' => '📖 بیوگرافی هنرمندان', 'url' => 'https://ahangban.ir/biography/' ),
+        );
         if ( AhangBan_Settings::is_menu_item_enabled( 'help' ) ) {
             $rows[] = array( array( 'text' => 'ℹ️ راهنما', 'callback_data' => 'help' ) );
         }
@@ -1850,6 +1866,96 @@ class AhangBan_Telegram {
 
     private static function handle_help( $chat, $user_id = 0 ) {
         self::send( $chat, self::help_text(), self::main_kb( AhangBan_Settings::is_admin( $user_id ) ) );
+    }
+
+    private static function handle_news( $chat ) {
+        $keyboard = array( 'inline_keyboard' => array(
+            array( array( 'text' => '📰 مشاهدهٔ اخبار آهنگ‌بان', 'url' => 'https://ahangban.ir/news/' ) ),
+            array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) ),
+        ) );
+        self::send( $chat, "📰 <b>اخبار آهنگ‌بان</b>\n\nبرای دیدن خبرهای منتشرشده، بخش رسمی اخبار سایت را باز کنید.", $keyboard );
+    }
+
+    private static function handle_biography_index( $chat ) {
+        $keyboard = array( 'inline_keyboard' => array(
+            array( array( 'text' => '📖 فهرست بیوگرافی هنرمندان', 'url' => 'https://ahangban.ir/biography/' ) ),
+            array( array( 'text' => '🔍 جست‌وجوی هنرمند', 'callback_data' => 'prompt:artist' ) ),
+            array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) ),
+        ) );
+        self::send(
+            $chat,
+            '📖 برای دیدن فهرست سایت یک هنرمند را انتخاب کنید، یا نام او را پس از /biography بنویسید تا بیوگرافی کامل ثبت‌شده در WordPress نمایش داده شود.',
+            $keyboard,
+            null
+        );
+    }
+
+    private static function handle_biography_search( $chat, $name ) {
+        $name = trim( (string) $name );
+        if ( ! self::is_valid_query( $name ) ) {
+            self::send( $chat, '⚠️ نام هنرمند باید بین ۲ تا ۱۰۰ نویسه باشد.', self::home_kb(), null );
+            return;
+        }
+        $per_page = min( 10, AhangBan_Settings::get_artists_per_page() );
+        $list = AhangBan_Search::get_artists( array( 'q' => $name, 'page' => 1, 'per_page' => $per_page, 'sort' => 'name' ) );
+        $results = is_array( $list ) ? ( $list['results'] ?? array() ) : array();
+        if ( is_wp_error( $list ) || empty( $results ) ) {
+            self::send( $chat, '😕 بیوگرافی این هنرمند پیدا نشد؛ نام را بررسی کنید یا فهرست سایت را ببینید.', array(
+                'inline_keyboard' => array(
+                    array( array( 'text' => '📖 فهرست بیوگرافی هنرمندان', 'url' => 'https://ahangban.ir/biography/' ) ),
+                    array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) ),
+                ),
+            ) );
+            return;
+        }
+        if ( 1 === (int) ( $list['total'] ?? count( $results ) ) ) {
+            $term_id = (int) ( $results[0]['term_id'] ?? 0 );
+            if ( $term_id > 0 ) { self::handle_artist_biography( $chat, $term_id ); return; }
+        }
+        $rows = array();
+        foreach ( array_slice( $results, 0, 10 ) as $artist ) {
+            $term_id = (int) ( $artist['term_id'] ?? 0 );
+            if ( $term_id <= 0 ) { continue; }
+            $artist_name = self::text_limit( $artist['name'] ?? 'هنرمند', 52 );
+            $rows[] = array( array( 'text' => '📖 ' . $artist_name, 'callback_data' => 'bio:' . $term_id ) );
+        }
+        $rows[] = array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) );
+        self::send( $chat, '📖 چند هنرمند پیدا شد؛ بیوگرافی موردنظر را انتخاب کنید:', array( 'inline_keyboard' => $rows ) );
+    }
+
+    private static function handle_artist_biography( $chat, $identifier, $return_page = 1, $return_sort = 'new' ) {
+        $term_id = (int) $identifier;
+        if ( $term_id <= 0 ) { self::send( $chat, '❌ شناسهٔ هنرمند نامعتبر است.', self::home_kb(), null ); return; }
+        $data = AhangBan_Search::get_artist_detail( $term_id, 1, 1, 'new' );
+        if ( is_wp_error( $data ) || ! is_array( $data ) || empty( $data['term'] ) ) {
+            self::send( $chat, '❌ بیوگرافی فعلاً در دسترس نیست؛ کمی بعد دوباره تلاش کنید.', self::home_kb(), null );
+            return;
+        }
+        $term = $data['term'];
+        $name = self::esc( $term['name'] ?? 'هنرمند' );
+        $description = (string) ( $term['description'] ?? '' );
+        $description = preg_replace( '/<br\s*\/?\s*>/iu', "\n", $description );
+        $description = preg_replace( '/<\/p\s*>/iu', "\n\n", $description );
+        $description = wp_strip_all_tags( $description );
+        $description = html_entity_decode( $description, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+        $description = preg_replace( '/[ \t]+\n/u', "\n", $description );
+        $description = preg_replace( '/\n{3,}/u', "\n\n", $description );
+        $description = trim( $description );
+        $text = '📖 <b>بیوگرافی ' . $name . '</b>';
+        if ( '' === $description ) {
+            $text .= "\n\nبرای این هنرمند بیوگرافی‌ای در سایت ثبت نشده است.";
+        } else {
+            $text .= "\n\n" . self::esc( self::text_limit( $description, 3400 ) );
+        }
+
+        $rows = array();
+        $link = esc_url( $term['link'] ?? '', array( 'https' ) );
+        if ( $link ) { $rows[] = array( array( 'text' => '📚 بیوگرافی و آثار در سایت', 'url' => $link ) ); }
+        $return_page = max( 1, min( 1000, (int) $return_page ) );
+        $return_sort = in_array( $return_sort, array( 'new', 'old' ), true ) ? $return_sort : 'new';
+        $rows[] = array( array( 'text' => '🎤 بازگشت به آثار هنرمند', 'callback_data' => 'artist:' . $term_id . ':' . $return_page . ':' . $return_sort ) );
+        $rows[] = array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) );
+        self::send( $chat, $text, array( 'inline_keyboard' => $rows ) );
     }
 
     private static function handle_ping( $chat ) {
@@ -2086,6 +2192,7 @@ class AhangBan_Telegram {
                 array( 'text' => '🕐 جدیدترین' . ( 'new' === $sort ? ' ✅' : '' ), 'callback_data' => 'artist:' . $term_id . ':1:new' ),
                 array( 'text' => '📅 قدیمی‌ترین' . ( 'old' === $sort ? ' ✅' : '' ), 'callback_data' => 'artist:' . $term_id . ':1:old' ),
             );
+            $rows[] = array( array( 'text' => '📖 بیوگرافی کامل', 'callback_data' => 'bio:' . $term_id . ':' . $page . ':' . $sort ) );
         }
         $navigation = array();
         if ( $page > 1 ) { $navigation[] = array( 'text' => '◀️ قبلی', 'callback_data' => 'artist:' . $term_id . ':' . ( $page - 1 ) . ':' . $sort ); }
@@ -2094,7 +2201,7 @@ class AhangBan_Telegram {
         if ( $navigation ) { $rows[] = $navigation; }
         if ( ! empty( $term['link'] ) ) {
             $link = esc_url( $term['link'], array( 'http', 'https' ) );
-            if ( $link ) { $rows[] = array( array( 'text' => '🔗 صفحه در سایت', 'url' => $link ) ); }
+            if ( $link ) { $rows[] = array( array( 'text' => '📚 بیوگرافی و آثار در سایت', 'url' => $link ) ); }
         }
         $rows[] = array( array( 'text' => '🏠 خانه', 'callback_data' => 'home' ) );
         $keyboard = array( 'inline_keyboard' => $rows );
@@ -2730,6 +2837,14 @@ class AhangBan_Telegram {
                 self::handle_artists_list( $chat, 1, $letter );
                 return;
             }
+        }
+
+        if ( preg_match( '/^bio:([1-9][0-9]*)(?::([1-9][0-9]*):(new|old))?$/', $data, $match ) ) {
+            $return_page = isset( $match[2] ) ? max( 1, min( 1000, (int) $match[2] ) ) : 1;
+            $return_sort = isset( $match[3] ) ? $match[3] : 'new';
+            self::answer_cb( $callback_id );
+            self::handle_artist_biography( $chat, (int) $match[1], $return_page, $return_sort );
+            return;
         }
 
         if ( self::starts_with( $data, 'artist:' ) ) {

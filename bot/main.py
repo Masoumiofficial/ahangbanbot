@@ -21,8 +21,6 @@ from telegram.ext import (
 
 from .config import BOT_TOKEN, LOG_LEVEL, RATE_LIMIT_PER_MINUTE, is_admin, validate
 from .db import check_rate_limit, init_db, is_blocked, upsert_user
-from .health_server import start_health_server
-from .utils.radio_stream import radio_stream_configured, radio_stream_requested, run_radio_stream
 from .handlers.account import (
     account_feed_handler,
     account_follows_handler,
@@ -54,6 +52,8 @@ from .handlers.admin import (
     unblock_handler,
 )
 from .handlers.artist import (
+    artist_biography_callback,
+    artist_biography_handler,
     artist_callback,
     artist_command,
     artist_follow_callback,
@@ -63,11 +63,13 @@ from .handlers.artist import (
     artists_list_handler,
 )
 from .handlers.browse import browse_callback, latest_handler, popular_handler
+from .handlers.radio import radio_handler, radio_post_handler
 from .handlers.search import (
     search_command,
     search_pagination_callback,
     search_text_handler,
 )
+from .handlers.site_pages import news_handler
 from .handlers.song import (
     album_callback,
     download_callback,
@@ -90,7 +92,12 @@ from .handlers.start import (
     search_prompt_callback,
     start_handler,
 )
-from .handlers.radio import radio_handler, radio_post_handler
+from .health_server import start_health_server
+from .utils.radio_stream import (
+    radio_stream_configured,
+    radio_stream_requested,
+    run_radio_stream,
+)
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -187,6 +194,9 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("ping", ping_handler))
     app.add_handler(CommandHandler("radio", radio_handler))
+    app.add_handler(CommandHandler("news", news_handler))
+    app.add_handler(CommandHandler("biography", artist_biography_handler))
+    app.add_handler(CommandHandler("bio", artist_biography_handler))
     app.add_handler(CommandHandler("radio_post", radio_post_handler))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("song", song_command))
@@ -236,6 +246,7 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(lyrics_callback, pattern=r"^lyrics:\d+$"))
     app.add_handler(CallbackQueryHandler(related_callback, pattern=r"^related:\d+$"))
     app.add_handler(CallbackQueryHandler(album_callback, pattern=r"^album:\d+$"))
+    app.add_handler(CallbackQueryHandler(artist_biography_callback, pattern=r"^bio:\d+:\d+:(new|old|title)$"))
     app.add_handler(CallbackQueryHandler(artist_follow_callback, pattern=r"^artist_follow:\d+:\d+:(new|old|title)$"))
     app.add_handler(CallbackQueryHandler(artist_follows_callback, pattern=r"^artist_follows:page:\d+$"))
     app.add_handler(CallbackQueryHandler(artist_unfollow_callback, pattern=r"^artist_unfollow:\d+:\d+$"))

@@ -1,4 +1,5 @@
 import html
+import re
 
 
 def esc(text: str) -> str:
@@ -70,6 +71,31 @@ def artist_caption(term: dict, buckets: dict = None) -> str:
         lines.append(f'\n🔗 <a href="{esc(term["link"])}">صفحه در سایت</a>')
     return "\n".join(lines)
 
+def artist_biography_text(term: dict, max_length: int = 3500) -> str:
+    """Render the full WordPress artist term description as safe Telegram HTML."""
+    name = esc(term.get("name") or "هنرمند")
+    description = term.get("description") or ""
+    description = re.sub(r"<br\s*/?>", "\n", description, flags=re.IGNORECASE)
+    description = re.sub(r"</p\s*>", "\n\n", description, flags=re.IGNORECASE)
+    description = re.sub(r"<[^>]*>", "", description)
+    description = html.unescape(description)
+    description = re.sub(r"[ \t]+\n", "\n", description)
+    description = re.sub(r"\n{3,}", "\n\n", description).strip()
+
+    if not description:
+        body = "برای این هنرمند بیوگرافی‌ای در سایت ثبت نشده است."
+    else:
+        body = html.escape(description)
+        if len(body) > max_length:
+            body = body[:max_length]
+            # Don't leave a partial HTML entity at the end of the message.
+            if body.rfind("&") > body.rfind(";"):
+                body = body[:body.rfind("&")]
+            body = body.rstrip() + "…"
+
+    return f"📖 <b>بیوگرافی {name}</b>\n\n{body}"
+
+
 def search_header(query: str, total: int, page: int, per_page: int) -> str:
     q = esc(query)
     total_fa = f"{total:,}".replace(",", "٬")
@@ -126,6 +152,8 @@ def welcome_text(name: str = "") -> str:
         "• 🆕 جدیدترین و 🔥 محبوب‌ترین آثار\n"
         "• 💿 کیفیت‌های ۱۲۸ و ۳۲۰ + موزیک‌ویدیو\n"
         "• 📻 دسترسی سریع به رادیوی آنلاین آهنگ‌بان\n"
+        "• 📰 دسترسی به بخش اخبار سایت\n"
+        "• 📖 مشاهدهٔ بیوگرافی کامل هنرمندان از کارت هر خواننده\n"
         "• 📝 متن ترانه و آثار مرتبط\n\n"
         "برای شروع، نام آهنگ یا خواننده را بنویسید یا یکی از دکمه‌های زیر را بزنید."
     )
@@ -135,7 +163,9 @@ def help_text() -> str:
         "ℹ️ <b>راهنمای ربات آهنگ‌بان</b>\n\n"
         "🔍 <b>جست‌وجو:</b> کافیست نام آهنگ یا خواننده را تایپ کنید و ارسال کنید. "
         "ربات به‌صورت خودکار نرمال‌سازی فارسی (ی/ي، ک/ك، نیم‌فاصله) را انجام می‌دهد.\n\n"
-        "🎤 <b>فهرست خوانندگان:</b> دکمهٔ «فهرست خوانندگان» را بزنید و با حرف الفبا فیلتر کنید.\n\n"
+        "🎤 <b>فهرست خوانندگان:</b> دکمهٔ «فهرست خوانندگان» را بزنید و با حرف الفبا فیلتر کنید.\n"
+        "📖 <b>بیوگرافی:</b> از کارت هر هنرمند «بیوگرافی کامل» را بزنید؛ یا /biography را همراه نام هنرمند بفرستید.\n"
+        "📰 <b>اخبار:</b> /news یا دکمهٔ اخبار، بخش رسمی اخبار آهنگ‌بان را باز می‌کند.\n\n"
         "❤️ <b>پسندیده‌ها:</b> پسند/برداشتن پسند از کارت آهنگ و مرور یا حذف از فهرست شخصی.\n"
         "🔔 <b>هنرمندان دنبال‌شده:</b> دنبال‌کردن یا لغو دنبال‌کردن و دیدن فهرست شخصی؛ اعلان انتشار در این نسخه ارسال نمی‌شود.\n\n"
         "🆕 <b>جدیدترین / محبوب:</b> آخرین آثار منتشرشده یا پرشنونده‌ترین‌های ماه.\n\n"
@@ -150,6 +180,8 @@ def help_text() -> str:
         "📌 دستورات دیگر:\n"
         "/start — شروع و منوی اصلی\n"
         "/radio — بازکردن رادیوی آنلاین آهنگ‌بان\n"
+        "/news — بازکردن بخش اخبار آهنگ‌بان\n"
+        "/biography [نام هنرمند] — فهرست بیوگرافی‌ها یا نمایش بیوگرافی کامل\n"
         "/radio_post — انتشار پیوند رادیو در کانال (فقط ادمین)\n"
         "/search &lt;عبارت&gt; — جست‌وجوی مستقیم\n"
         "/new — جدیدترین آثار سایت\n"

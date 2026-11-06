@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from ..config import RADIO_PAGE_URL
+from ..config import BIOGRAPHY_PAGE_URL, NEWS_PAGE_URL, RADIO_PAGE_URL
 
 
 # ---------- Main menu (ReplyKeyboard for easy access) ----------
@@ -34,6 +34,10 @@ def main_inline(is_admin: bool = False) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("❤️ پسندیده‌ها", callback_data="favorites:page:1"),
             InlineKeyboardButton("🔔 هنرمندان دنبال‌شده", callback_data="artist_follows:page:1"),
+        ],
+        [
+            InlineKeyboardButton("📰 اخبار", url=NEWS_PAGE_URL),
+            InlineKeyboardButton("📖 بیوگرافی هنرمندان", url=BIOGRAPHY_PAGE_URL),
         ],
         [InlineKeyboardButton("📻 رادیوی آنلاین", url=RADIO_PAGE_URL)],
         [InlineKeyboardButton("ℹ️ راهنما", callback_data="help")],
@@ -152,10 +156,12 @@ def artist_card(
     ])
     term_id = term.get("term_id")
     if str(term_id or "").isdigit() and int(term_id) > 0:
+        numeric_term_id = int(term_id)
         follow_label = "✅ دنبال‌شده" if is_followed else "➕ دنبال‌کردن"
         if int(follower_count) > 0:
             follow_label += f" · {int(follower_count)}"
-        rows.append([InlineKeyboardButton(follow_label, callback_data=f"artist_follow:{int(term_id)}:{int(page)}:{sort}")])
+        rows.append([InlineKeyboardButton(follow_label, callback_data=f"artist_follow:{numeric_term_id}:{int(page)}:{sort}")])
+        rows.append([InlineKeyboardButton("📖 بیوگرافی کامل", callback_data=f"bio:{numeric_term_id}:{int(page)}:{sort}")])
     # Pagination
     if total_pages > 1:
         nav = []
@@ -166,7 +172,7 @@ def artist_card(
             nav.append(InlineKeyboardButton("بعدی ▶️", callback_data=f"artist:{slug}:{page+1}:{sort}"))
         rows.append(nav)
     if term.get("link"):
-        rows.append([InlineKeyboardButton("🔗 صفحه در سایت", url=term["link"])])
+        rows.append([InlineKeyboardButton("📚 بیوگرافی و آثار در سایت", url=term["link"])])
     rows.append([InlineKeyboardButton("🏠 خانه", callback_data="home")])
     return InlineKeyboardMarkup(rows)
 
