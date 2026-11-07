@@ -294,24 +294,30 @@ class AhangBan_Telegram {
         $title = self::esc( self::text_limit( $song['song'] ?? $song['title'] ?? 'آهنگ جدید', 100 ) );
         $artist = self::esc( self::channel_artist_text( $song ) );
         $hashtags = self::channel_artist_hashtags( $song );
-        $permalink = esc_url( $song['permalink'] ?? '', array( 'http', 'https' ) );
-        $caption = '';
-        if ( '' !== $artist ) { $caption .= "🗣 {$artist}\n\n"; }
-        $caption .= "🎵 {$title}";
-        if ( '' !== $hashtags ) { $caption .= "\n\n🎤 {$hashtags}"; }
-        $caption .= "\n\n🔗 " . ( $permalink ? '<a href="' . $permalink . '">مشاهده صفحه رسمی</a>' : 'مشاهده صفحه رسمی' );
-        $footer = AhangBan_Settings::get_channel_caption_footer();
-        if ( '' !== $footer ) { $caption .= "\n\n" . self::esc( $footer ); }
-        $caption .= "\n\n🆔️ @Ahangban_ir 💙";
-
-        // A stable hashtag containing the real WordPress post ID makes channel posts searchable.
         $post_id = (int) ( $song['id'] ?? 0 );
+        $permalink = esc_url( $song['permalink'] ?? '', array( 'http', 'https' ) );
+
+        $prefix = '';
+        if ( '' !== $artist ) { $prefix .= "🗣 {$artist}\n\n"; }
+        $prefix .= "🎵 {$title}";
+        if ( '' !== $hashtags ) { $prefix .= "\n\n🎤 {$hashtags}"; }
+
+        $id_section = '';
         if ( $post_id > 0 ) {
-            $post_hashtag = '#ahangban_post_' . $post_id;
-            $prefix_limit = max( 0, 900 - self::text_length( "\n\n" . $post_hashtag ) );
-            return self::text_limit( $caption, $prefix_limit ) . "\n\n" . $post_hashtag;
+            $id_section = "\n\n🔖 شناسه اثر:\n\n#AhangBan_" . $post_id;
         }
-        return self::text_limit( $caption, 900 );
+        $link_section = "\n\n🔗 " . ( $permalink ? '<a href="' . $permalink . '">مشاهده صفحه رسمی</a>' : 'مشاهده صفحه رسمی' );
+        $footer = AhangBan_Settings::get_channel_caption_footer();
+        $footer_section = '' !== $footer ? "\n\n" . self::esc( $footer ) : '';
+        $brand_section = "\n\n🆔️ @Ahangban_ir 💙";
+
+        if ( '' !== $id_section ) {
+            // Reserve space for the post-ID section and fixed footer so the searchable hashtag is never clipped.
+            $fixed_length = self::text_length( $id_section . $link_section . $footer_section . $brand_section );
+            $prefix = self::text_limit( $prefix, max( 0, 900 - $fixed_length ) );
+            return $prefix . $id_section . $link_section . $footer_section . $brand_section;
+        }
+        return self::text_limit( $prefix . $link_section . $footer_section . $brand_section, 900 );
     }
 
     private static function channel_keyboard( $song ) {
